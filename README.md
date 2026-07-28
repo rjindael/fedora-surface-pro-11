@@ -6,6 +6,20 @@ Everything needed to reproduce from a stock Ubuntu install is in this repo — s
 
 > **Target device:** Microsoft Surface Pro 11, **OLED display**, **16 GB RAM**, **1 TB NVMe** (no 5G model). SKU `Surface_Pro_11th_Edition_2076`, Snapdragon X 12-core X1E80100 @ 3.40 GHz, UEFI firmware `175.222.235`.
 
+## Quick install
+
+The `install.sh` script automates all post-kernel configuration (Steps 2–8 below):
+
+```bash
+sudo ./install.sh             # install everything (grub, Wi-Fi, audio, pen, suspend, NPU)
+sudo ./install.sh --suspend   # install individual components only
+sudo ./install.sh --kernel    # also build & install the patched kernel (~30 min)
+sudo ./install.sh --list      # list all available phases
+sudo ./install.sh --uninstall # remove everything this script installed
+```
+
+Prefer step-by-step? The **manual instructions** for each component follow below.
+
 ## Status Summary
 
 | **Feature** | **Status** | **Notes** |
@@ -608,6 +622,7 @@ systemctl status hexagonrpcd.service         # active
 ```
 ubuntu-surface-pro-11/
 ├── README.md               This file (full installation guide)
+├── install.sh              One-shot installer (all components; see Quick install above)
 ├── INDEX.md                Document index
 ├── WIFI.md SOUND.md TOUCHSCREEN.md PEN.md SUSPEND.md NPU.md
 ├── scripts/                All installation, troubleshooting & NPU chat scripts (17 files)
