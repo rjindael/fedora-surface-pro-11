@@ -1,0 +1,177 @@
+#!/usr/bin/python3
+"""Drive the SP11 panel backlight from the device-tree GPIO lid switch."""
+
+import array
+import fcntl
+import logging
+import os
+import pathlib
+import select
+import struct
+import subprocess
+import sys
+import time
+
+EV_SW = 0x05
+SW_LID = 0x00
+EVIOCGSW_1 = 0x8001451B
+EVENT = struct.Struct("llHHi")
+EV_SYN = 0x00
+
+BACKLIGHT = pathlib.Path("/sys/class/backlight/dp_aux_backlight/brightness")
+SAVED = pathlib.Path("/run/sp11-lid-backlight.saved")
+LID_WAKEUP = pathlib.Path("/sys/devices/platform/gpio-keys/power/wakeup")
+SUSPEND_DELAY = 60
+
+logging.basicConfig(
+    level=logging.INFO, format="%(message)s", stream=sys.stdout
+)
+log = logging.getLogger("sp11-lid-backlight")
+
+
+def find_lid_event() -> pathlib.Path:
+    for input_dir in pathlib.Path("/sys/class/input").glob("input*"):
+        try:
+            if (input_dir / "name").read_text().strip() != "gpio-keys":
+                continue
+            sw = int((input_dir / "capabilities/sw").read_text().strip(), 16)
+            if sw & (1 << SW_LID):
+                event = next(input_dir.glob("event*"))
+                return pathlib.Path("/dev/input") / event.name
+        except (OSError, StopIteration, ValueError):
+            continue
+    raise RuntimeError("gpio-keys SW_LID input device is unavailable")
+
+
+def open_input_events(lid_path: pathlib.Path):
+    events = {}
+    for path in pathlib.Path("/dev/input").glob("event*"):
+        try:
+            events[path.open("rb", buffering=0)] = path
+        except OSError:
+            continue
+    if lid_path not in events.values():
+        raise RuntimeError(f"{lid_path} could not be opened")
+    return events
+
+
+class Backlight:
+    def __init__(self) -> None:
+        self.off = False
+
+    def close(self) -> None:
+        if self.off:
+            return
+        current = int(BACKLIGHT.read_text().strip())
+        if current > 0:
+            SAVED.write_text(f"{current}\n")
+        BACKLIGHT.write_text("0\n")
+        self.off = True
+        log.info("lid closed; backlight disabled (saved %d)", current)
+
+    def open(self) -> None:
+        if not self.off:
+            return
+        try:
+            saved = int(SAVED.read_text().strip())
+        except (OSError, ValueError):
+            saved = 512
+        saved = max(saved, 1)
+        BACKLIGHT.write_text(f"{saved}\n")
+        self.off = False
+        log.info("lid opened; restored brightness to %d", saved)
+
+
+def main() -> None:
+    if not os.access(BACKLIGHT, os.W_OK):
+        raise RuntimeError(f"{BACKLIGHT} is unavailable")
+
+    disabled = 0
+    for wakeup in pathlib.Path("/sys/devices").glob("**/power/wakeup"):
+        if ":pwrkey/power/wakeup" in str(wakeup):
+            try:
+                wakeup.write_text("enabled\n")
+            except OSError:
+                pass
+            continue
+        try:
+            if wakeup.read_text().strip() == "enabled":
+                wakeup.write_text("disabled\n")
+                disabled += 1
+        except OSError:
+            continue
+    log.info(
+        "power-button-only wake policy active; disabled %d other wake sources",
+        disabled,
+    )
+
+    event_path = find_lid_event()
+    backlight = Backlight()
+    events = open_input_events(event_path)
+    lid_event = next(event for event, path in events.items()
+                     if path == event_path)
+    try:
+        switches = array.array("B", [0])
+        fcntl.ioctl(lid_event.fileno(), EVIOCGSW_1, switches, True)
+        closed = bool(switches[0] & (1 << SW_LID))
+        log.info("monitoring %s SW_LID and %d input devices; initial state=%s",
+                 event_path, len(events), "closed" if closed else "open")
+        backlight.close() if closed else backlight.open()
+        deadline = time.monotonic() + SUSPEND_DELAY if closed else None
+        suspended_for_this_close = False
+
+        while True:
+            timeout = None
+            if deadline is not None:
+                timeout = max(0.0, deadline - time.monotonic())
+            ready, _, _ = select.select(list(events), [], [], timeout)
+            if not ready:
+                log.info("lid closed and inactive for %d seconds; suspending",
+                         SUSPEND_DELAY)
+                suspended_for_this_close = True
+                deadline = None
+                subprocess.run(
+                    ["/usr/bin/systemctl", "suspend"],
+                    check=False,
+                )
+                continue
+
+            for event in ready:
+                data = event.read(EVENT.size)
+                if len(data) != EVENT.size:
+                    continue
+                _, _, event_type, code, value = EVENT.unpack(data)
+                is_lid = (
+                    event is lid_event
+                    and event_type == EV_SW
+                    and code == SW_LID
+                )
+                if is_lid:
+                    closed = bool(value)
+                    if closed:
+                        backlight.close()
+                        suspended_for_this_close = False
+                        deadline = time.monotonic() + SUSPEND_DELAY
+                        log.info(
+                            "lid closed; suspend after %d seconds of inactivity",
+                            SUSPEND_DELAY,
+                        )
+                    else:
+                        backlight.open()
+                        if deadline is not None:
+                            log.info("lid opened; pending suspend cancelled")
+                        deadline = None
+                        suspended_for_this_close = False
+                elif (
+                    closed
+                    and not suspended_for_this_close
+                    and event_type != EV_SYN
+                ):
+                    deadline = time.monotonic() + SUSPEND_DELAY
+    finally:
+        for event in events:
+            event.close()
+
+
+if __name__ == "__main__":
+    main()

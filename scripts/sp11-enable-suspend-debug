@@ -1,0 +1,25 @@
+#!/bin/sh
+set -u
+
+control=/sys/kernel/debug/dynamic_debug/control
+tag=sp11-suspend-debug
+
+if [ ! -w "$control" ]; then
+    logger -t "$tag" "dynamic-debug control is unavailable"
+    exit 0
+fi
+
+# Restrict this to PM transitions; full SSAM packet logging is too noisy.
+for function in \
+    ssam_controller_suspend \
+    ssam_controller_resume \
+    ssam_ctrl_notif_display_off \
+    ssam_ctrl_notif_display_on \
+    ssam_ctrl_notif_d0_exit \
+    ssam_ctrl_notif_d0_entry \
+    ssam_irq_handle
+do
+    printf 'func %s +p\n' "$function" > "$control" 2>/dev/null || true
+done
+
+logger -t "$tag" "selective Surface Aggregator PM debug enabled"

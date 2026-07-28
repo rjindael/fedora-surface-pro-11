@@ -1,0 +1,5 @@
+## Stable device symlink for the Surface Pro 11 digitizer/pen HID-over-SPI
+## device (VID 045E, PID 0C83). Matches the parent HID device's kernel name
+## ("001C:045E:0C83.<instance>") rather than the hidrawN number, which is
+## not stable across boots when other hidraw devices enumerate first.
+SUBSYSTEM=="hidraw", KERNELS=="001C:045E:0C83.*", SYMLINK+="sp11-pen"

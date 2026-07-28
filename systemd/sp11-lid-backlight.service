@@ -1,0 +1,12 @@
+[Unit]
+Description=Turn off SP11 backlight while Flex cover is closed
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/sp11-lid-backlight
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

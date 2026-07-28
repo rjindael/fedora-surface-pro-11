@@ -1,0 +1,11 @@
+[Unit]
+Description=Enable Surface Pro 11 suspend debug logging
+After=systemd-journald.service sys-kernel-debug.mount
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sp11-enable-suspend-debug
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

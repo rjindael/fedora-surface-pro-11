@@ -1,0 +1,18 @@
+[Unit]
+Description=Surface Pro 11 pen (digitizer) HEAT input daemon
+After=systemd-udevd.service
+Wants=systemd-udevd.service
+
+[Service]
+Type=simple
+# /dev/sp11-pen is created by 99-sp11-pen.rules once the kernel HID driver
+# binds the digitizer. That normally happens well before this service
+# starts, but wait briefly rather than fail on the rare slow-enumeration
+# boot (same pattern as sp11-wsa-routing.service / the pipewire wait unit).
+ExecStartPre=/bin/sh -c 'i=0; while [ ! -e /dev/sp11-pen ] && [ "$i" -lt 30 ]; do i=$((i+1)); sleep 1; done; [ -e /dev/sp11-pen ]'
+ExecStart=/usr/local/sbin/sp11-pen-daemon /dev/sp11-pen
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
