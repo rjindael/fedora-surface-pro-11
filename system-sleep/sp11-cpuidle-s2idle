@@ -1,0 +1,17 @@
+#!/bin/bash
+# systemd system-sleep hook: disable the broken PSCI cpu-sleep-0 idle state
+# before s2idle entry, restore it on resume.
+#
+# Install: sudo cp system-sleep/sp11-cpuidle-s2idle /usr/lib/systemd/system-sleep/
+#          sudo chmod +x /usr/lib/systemd/system-sleep/sp11-cpuidle-s2idle
+# (systemd 259+ only runs hooks from /usr/lib/systemd/system-sleep/, NOT
+#  /etc/systemd/system-sleep/ — confirmed via `strings` on the binary.)
+#
+# systemd-sleep runs this with $1="pre" (before suspend) or "post" (after
+# resume) and $2="suspend"|"hibernate"|...  See SUSPEND.md for the full
+# root-cause analysis.
+case "$1/$2" in
+  pre/suspend)  /usr/local/sbin/sp11-fix-cpuidle-s2idle disable ;;
+  post/suspend) /usr/local/sbin/sp11-fix-cpuidle-s2idle enable  ;;
+esac
+exit 0

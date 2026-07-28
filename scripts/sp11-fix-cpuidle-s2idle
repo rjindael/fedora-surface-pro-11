@@ -1,0 +1,38 @@
+#!/bin/bash
+# sp11-fix-cpuidle-s2idle — toggle the PSCI cpu-sleep-0 idle state.
+#
+# Root cause (2026-07-28): the "cpu-sleep-0" PSCI retention cpuidle state
+# (state1, latency 500us) hard-faults the SoC during s2idle entry — every
+# real suspend crashed at "PM: suspend entry (s2idle)" with a watchdog reset,
+# kernel log lost (no pstore/ramoops on this DT). Proven by pm_test bisection:
+# freezer, devices, and platform levels all pass; only the final cpuidle idle
+# entry (pm_test=none) crashes. Disabling cpu-sleep-0 makes s2idle fall back
+# to WFI, which is stable. Full suspend->resume then works.
+#
+# Called by system-sleep/sp11-cpuidle-s2idle so cpu-sleep-0 is disabled ONLY
+# during suspend and restored on resume (runtime idle stays power-efficient).
+#
+# Usage: sp11-fix-cpuidle-s2idle [disable|enable|status]   (default: disable)
+set -e
+STATE_DIR="/sys/devices/system/cpu"
+ACTION="${1:-disable}"
+
+case "$ACTION" in
+  disable) VAL=1 ;;
+  enable)  VAL=0 ;;
+  status)
+    total=0; dis=0
+    for s in "$STATE_DIR"/cpu[0-9]*/cpuidle/state1/disable; do
+      [ -r "$s" ] || continue
+      total=$((total+1)); [ "$(cat "$s")" = "1" ] && dis=$((dis+1))
+    done
+    echo "cpu-sleep-0: ${dis}/${total} CPUs disabled"
+    exit 0 ;;
+  *) echo "usage: $0 [disable|enable|status]" >&2; exit 2 ;;
+esac
+
+n=0
+for s in "$STATE_DIR"/cpu[0-9]*/cpuidle/state1/disable; do
+  if [ -w "$s" ]; then echo "$VAL" > "$s"; n=$((n+1)); fi
+done
+logger -t sp11-cpuidle-s2idle "$([ "$VAL" = 1 ] && echo disabled || echo enabled) cpu-sleep-0 on $n CPUs"

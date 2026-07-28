@@ -23,7 +23,7 @@ Everything needed to reproduce from a stock Ubuntu install is in this repo — s
 | Touchscreen | ✅ | Single-touch (tap, drag, scroll) working via HID-over-SPI with custom kernel patches (QSPI DMA + HID-SPI stack + Denali DTS node). Multi-touch not available. |
 | Pen | ✅ | Surface Slim Pen 2 fully working via hybrid HEAT/uinput auto-switching daemon. 1–4095 pressure levels, hover, tip contact, eraser. |
 | Flex Keyboard | ✅ | Type Cover touchpad and keyboard work when attached |
-| Suspend / Resume | ⚠️ Partial | Lid-switch suspend works (backlight off + 60s timeout). Power-button-only wake policy. Resume occasionally fails to restore display — may need lid re-open. |
+| Suspend / Resume | ✅ | `s2idle` working via lid-switch daemon (close → backlight off → 60s → suspend → power-button resume). Requires `cpu-sleep-0` cpuidle workaround (`pm_test`-bisected root cause) + hexagonrpcd suspend-hook condition fix. See [SUSPEND.md](SUSPEND.md). |
 | Cameras (and status LEDs) | ❌ | Not working |
 | NPU — CPU inference | ✅ | llama.cpp CPU inference working via QNN SDK + Hexagon backend build |
 | NPU — DSP (HTP0) offload | ✅ | llama.cpp runs on Hexagon NPU via `--device HTP0`. Verified: Llama-3.2-1B (~48 t/s), Qwen2.5-Coder-3B (~21 t/s). CDSP remoteproc reset recommended before each run to defragment rpcmem heap. See [NPU.md](NPU.md). |
@@ -322,7 +322,64 @@ The daemon creates a virtual stylus (`SP11 G6 Virtual Stylus`) supporting 1–40
 
 > Details: [SUSPEND.md](SUSPEND.md)
 
-### 7a. Install lid-switch backlight/suspend daemon
+`s2idle` (suspend-to-idle) is working. Close the Flex cover → backlight off →
+60s inactivity → suspend → power button resumes cleanly.
+
+**Root cause of the earlier crash** (2026-07-28): the `cpu-sleep-0` PSCI
+retention cpuidle state hard-faults the SoC during s2idle entry — proven by
+`/sys/power/pm_test` bisection (freezer/devices/platform all pass; only the
+final cpuidle idle entry crashes). The crash behaved as transient firmware
+state and later cleared on its own, but the fix below is kept as a safety net:
+it is a proven fix when the bad state is present and harmless otherwise.
+
+### 7a. Disable systemd-logind lid handling
+
+The lid daemon (not systemd-logind) must own suspend timing. Set `ignore` on
+all power states so logind does not race the daemon:
+
+```bash
+sudo sed -i 's/^#HandleLidSwitch=suspend/HandleLidSwitch=ignore/' /etc/systemd/logind.conf
+sudo systemctl restart systemd-logind
+```
+
+### 7b. Install the cpuidle s2idle fix (the root-cause workaround)
+
+Disables `cpu-sleep-0` before every suspend and restores it on resume, so
+runtime idle stays power-efficient (WFI during suspend, retention otherwise):
+
+```bash
+# Toggle script
+sudo cp scripts/sp11-fix-cpuidle-s2idle /usr/local/sbin/
+
+# system-sleep hook — MUST go in /usr/lib/, not /etc/ (systemd 259 only
+# runs hooks from /usr/lib/systemd/system-sleep/)
+sudo cp system-sleep/sp11-cpuidle-s2idle /usr/lib/systemd/system-sleep/
+sudo chmod +x /usr/local/sbin/sp11-fix-cpuidle-s2idle \
+              /usr/lib/systemd/system-sleep/sp11-cpuidle-s2idle
+```
+
+### 7c. Fix the hexagonrpcd suspend-hook condition (defensive)
+
+The `hexagonrpcd` package ships suspend/resume hooks that stop the sensors
+daemon across suspend, but they are guarded by the wrong SoC condition
+(`qcom,sdm670` instead of `qcom,x1e80100`) so they never fire. Fix it:
+
+```bash
+sudo mkdir -p /etc/systemd/system/hexagonrpcd-suspend.service.d
+sudo mkdir -p /etc/systemd/system/hexagonrpcd-resume.service.d
+sudo cp systemd/hexagonrpcd-condition-override.conf \
+    /etc/systemd/system/hexagonrpcd-suspend.service.d/override.conf
+sudo cp systemd/hexagonrpcd-condition-override.conf \
+    /etc/systemd/system/hexagonrpcd-resume.service.d/override.conf
+sudo systemctl daemon-reload
+```
+
+### 7d. Install the lid-switch backlight/suspend daemon
+
+The `sp11-lid-backlight` daemon: finds the lid switch (`gpio-keys SW_LID`),
+disables all wake sources except the power button, turns off the backlight on
+close (restores on open), and triggers `systemctl suspend` after 60s of lid-closed
+inactivity (external input resets the timer):
 
 ```bash
 sudo cp scripts/sp11-lid-backlight /usr/local/sbin/
@@ -331,15 +388,28 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now sp11-lid-backlight.service
 ```
 
-This daemon turns off the backlight when the lid closes, suspends after 60s of inactivity, and enforces power-button-only wake.
-
-### 7b. Install suspend debug logging
+### 7e. Suspend debug logging (optional)
 
 ```bash
 sudo cp scripts/sp11-enable-suspend-debug /usr/local/sbin/
 sudo cp systemd/sp11-suspend-debug.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now sp11-suspend-debug.service
+sudo systemctl enable sp11-suspend-debug.service
+```
+
+### 7f. Verify
+
+```bash
+# cpuidle fix active (0/12 at runtime — disabled only during suspend by hook)
+sp11-fix-cpuidle-s2idle status
+
+# All services
+systemctl status sp11-lid-backlight.service
+systemctl is-active hexagonrpcd-suspend.service
+
+# After a suspend/resume cycle (close lid, wait 60s, power button to wake):
+cat /sys/power/suspend_stats/success   # should increment
+journalctl -b 0 -g sp11-cpuidle-s2idle # hook fired (disabled pre, enabled post)
 ```
 
 ---
@@ -519,7 +589,9 @@ cat /proc/bus/input/devices | grep -A8 "Virtual Stylus"
 
 # Suspend
 systemctl status sp11-lid-backlight.service  # active
-systemctl status sp11-suspend-debug.service  # active
+sp11-fix-cpuidle-s2idle status               # cpu-sleep-0: 0/12 disabled (runtime)
+ls /usr/lib/systemd/system-sleep/sp11-cpuidle-s2idle  # hook installed
+cat /sys/power/suspend_stats/success         # increments per successful suspend
 
 # NPU
 ls /dev/fastrpc-*                           # adsp, cdsp, cdsp-secure
@@ -538,9 +610,10 @@ ubuntu-surface-pro-11/
 ├── README.md               This file (full installation guide)
 ├── INDEX.md                Document index
 ├── WIFI.md SOUND.md TOUCHSCREEN.md PEN.md SUSPEND.md NPU.md
-├── scripts/                All installation, troubleshooting & NPU chat scripts (16 files)
+├── scripts/                All installation, troubleshooting & NPU chat scripts (17 files)
 ├── pen-daemon/             Hybrid pen/touch daemon source (sp11-pen-daemon.c)
-├── systemd/                systemd unit files (5 services)
+├── systemd/                systemd unit files + drop-in overrides (6 services)
+├── system-sleep/           systemd system-sleep hooks (cpuidle s2idle fix)
 ├── udev/                   udev rules (fastrpc + pen symlink)
 ├── audio/                  AudioReach topology binary + UCM2 configs
 ├── kernel-patches/         All kernel patches (18 patches: touchscreen + wifi + dmic)
