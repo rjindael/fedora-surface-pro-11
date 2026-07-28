@@ -32,13 +32,14 @@ Prefer step-by-step? The **manual instructions** for each component follow below
 | USB-C display output | ✅ | Working (DP alt mode, since 6.15-rc6) |
 | Wi-Fi | ✅ | WCN7850 / ath12k — kernel rfkill bypass + board data file extraction. Scans, connects, passes traffic. |
 | Bluetooth | ✅ | MAC address configured via `btmgmt` helper (`scripts/sp11-bluetooth-mac.sh`) |
-| Audio — Speakers | ⚠️ Partial | WSA884x dual speakers working via PipeWire manual sink. Can sound distorted at high volume. Requires boot-race fix (masked `alsactl` + WSA routing service). |
-| Audio — Microphone | ✅ | Dual DMIC working with 2.4 MHz clock (kernel patch) and unity gain (UCM2). Clear speech capture; slightly thin. |
+| Audio — Speakers | ✅ | WSA884x dual speakers working via PipeWire manual sink + WSA routing service (includes speaker codec switch enable). |
+| Audio — Microphone | ✅ | Dual far-field DMIC working via VA macro with 2.4 MHz clock (kernel patch) and unity gain (UCM2). Verified: clear stereo capture at 48 kHz. |
 | Touchscreen | ✅ | Single-touch (tap, drag, scroll) working via HID-over-SPI with custom kernel patches (QSPI DMA + HID-SPI stack + Denali DTS node). Multi-touch not available. |
 | Pen | ✅ | Surface Slim Pen 2 fully working via hybrid HEAT/uinput auto-switching daemon. 1–4095 pressure levels, hover, tip contact, eraser. |
 | Flex Keyboard | ✅ | Type Cover touchpad and keyboard work when attached |
 | Suspend / Resume | ✅ | `s2idle` working via lid-switch daemon (close → backlight off → 60s → suspend → power-button resume). Requires `cpu-sleep-0` cpuidle workaround (`pm_test`-bisected root cause) + hexagonrpcd suspend-hook condition fix. See [SUSPEND.md](SUSPEND.md). |
 | Cameras (and status LEDs) | ❌ | Not working |
+| Sensors | ⚠️ Partial | **Tablet mode switch** ✅ (SSAM TC 0x1E). **Accelerometer** ❌, **Gyroscope** ❌, **Magnetometer** ❌, **Ambient light** ❌ — all behind SSAM vendor HID device (`045E:09CF`, pages 0xFF05/0xFF0B). No ARM64 SSAM sensor driver exists in mainline or linux-surface. Requires reverse-engineering of vendor HID protocol. |
 | NPU — CPU inference | ✅ | llama.cpp CPU inference working via QNN SDK + Hexagon backend build |
 | NPU — DSP (HTP0) offload | ✅ | llama.cpp runs on Hexagon NPU via `--device HTP0`. Verified: Llama-3.2-1B (~48 t/s), Qwen2.5-Coder-3B (~21 t/s). CDSP remoteproc reset recommended before each run to defragment rpcmem heap. See [NPU.md](NPU.md). |
 
@@ -160,7 +161,7 @@ sudo cp grub/ubuntu-x1e-settings.cfg /etc/default/grub.d/
 sudo update-grub
 ```
 
-Key kernel arguments applied: `clk_ignore_unused pd_ignore_unused arm64.nopauth systemd.tpm2_wait=0 no_console_suspend pm_debug_messages efi=noruntime efi=novamap cma=128M`
+Key kernel arguments applied: `clk_ignore_unused pd_ignore_unused arm64.nopauth systemd.tpm2_wait=0 mem_sleep_default=s2idle`
 
 ---
 
@@ -171,7 +172,6 @@ Key kernel arguments applied: `clk_ignore_unused pd_ignore_unused arm64.nopauth 
 The WCN7850 (FastConnect 7800) needs a board data file. The rfkill bypass is already in the patched kernel.
 
 ```bash
-# Install the board data extraction script
 sudo cp scripts/sp11-wifi-board-fixup.sh /usr/local/sbin/sp11-wifi-board-fixup
 
 # Run it (extracts a compatible board.bin from linux-firmware's board-2.bin)

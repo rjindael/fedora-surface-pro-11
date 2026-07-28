@@ -84,7 +84,7 @@ while [ $# -gt 0 ]; do
                     echo "  audio     DSP firmware + topology + UCM2 + boot-race fix + PipeWire sink"; \
                     echo "  pen       Stylus daemon (udev + build + service)"; \
                     echo "  suspend   cpu-sleep-0 fix + hexagonrpcd hooks + lid daemon"; \
-                    echo "  npu       FastRPC udev + hexagonrpcd (SDK/build see NPU.md)"; \
+                    echo "  npu       FastRPC + QNN SDK + DSP runtime + llama.cpp build + model download"
                     echo "  kernel    Build & install patched kernel (long; needs ~20 GB)"; \
                     exit 0 ;;
         -h|--help)  echo "$USAGE"; exit 0 ;;
@@ -291,7 +291,7 @@ install_suspend() {
     ok "cpu-sleep-0 cpuidle fix installed (system-sleep hook)"
 
     # 7c — hexagonrpcd condition fix (if hexagonrpcd is installed)
-    if systemctl list-unit-files --no-pager 2>/dev/null | grep -q hexagonrpcd-suspend; then
+    if systemctl list-unit-files --no-pager 2>/dev/null | grep hexagonrpcd-suspend >/dev/null 2>&1; then
         mkdir -p /etc/systemd/system/hexagonrpcd-suspend.service.d
         mkdir -p /etc/systemd/system/hexagonrpcd-resume.service.d
         cp -f systemd/hexagonrpcd-condition-override.conf \
@@ -323,14 +323,21 @@ install_suspend() {
 # STEP 8 — NPU
 # ══════════════════════════════════════════════════════════════════════════
 install_npu() {
-    phase "NPU (FastRPC + hexagonrpcd)"
+    phase "NPU (FastRPC + QNN SDK + llama.cpp)"
 
-    # 8a — FastRPC udev rule
+    local NPU_RE="$REAL_HOME/npu-re"
+    local DSP_DIR="/usr/lib/dsp/cdsp"
+    local QAIRT_VER="2.48.0.260626"
+    local QAIRT_URL="https://apigwx-aws.qualcomm.com/qsc/public/v1/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/${QAIRT_VER}/v${QAIRT_VER}.zip"
+    local LLAMA_MODEL_URL="https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf"
+
+    # ── 8a — FastRPC udev rule ────────────────────────────────────────────
     install_file udev/99-fastrpc.rules /etc/udev/rules.d/99-fastrpc.rules
     udevadm control --reload-rules
     udevadm trigger
+    ok "FastRPC udev rule deployed (0666 on /dev/fastrpc-*)"
 
-    # 8b — hexagonrpcd
+    # ── 8b — hexagonrpcd + DSP binaries ──────────────────────────────────
     if ! dpkg -l hexagonrpcd >/dev/null 2>&1; then
         log "Installing hexagonrpcd packages…"
         apt update
@@ -341,8 +348,8 @@ install_npu() {
     fi
     systemctl enable hexagonrpcd.service
 
-    # If suspend was also requested (or already done), apply the condition fix now
-    if systemctl list-unit-files --no-pager 2>/dev/null | grep -q hexagonrpcd-suspend; then
+    # If suspend was also requested (or already done), apply the condition fix
+    if systemctl list-unit-files --no-pager 2>/dev/null | grep hexagonrpcd-suspend >/dev/null 2>&1; then
         mkdir -p /etc/systemd/system/hexagonrpcd-suspend.service.d
         mkdir -p /etc/systemd/system/hexagonrpcd-resume.service.d
         cp -f systemd/hexagonrpcd-condition-override.conf \
@@ -353,10 +360,184 @@ install_npu() {
         ok "hexagonrpcd suspend-hook condition fixed"
     fi
 
-    ok "NPU prerequisites installed"
+    # ── 8c — Deploy DSP runtime from hexagon-dsp-binaries ────────────────
+    local PKG_DSP="/usr/share/hexagon-dsp/x1e80100/Qualcomm/Hamoa-IoT-EVK/dsp/cdsp"
+    mkdir -p "$DSP_DIR"
+    if [ -f "$PKG_DSP/fastrpc_shell_unsigned_3" ]; then
+        cp -f "$PKG_DSP/fastrpc_shell_unsigned_3" "$DSP_DIR/"
+        cp -f "$PKG_DSP/fastrpc_shell_3" "$DSP_DIR/" 2>/dev/null || true
+        cp -f "$PKG_DSP/version.so" "$DSP_DIR/" 2>/dev/null || true
+        ok "DSP FastRPC shell deployed from hexagon-dsp-binaries"
+    elif [ -f "$DSP_DIR/fastrpc_shell_unsigned_3" ]; then
+        ok "DSP FastRPC shell already deployed"
+    else
+        warn "fastrpc_shell_unsigned_3 not found — manual deployment needed"
+        warn "  See NPU.md Layer 4: Deploy CDSP firmware + DSP runtime"
+    fi
+
+    # ── 8d — Build user-space fastrpc library ────────────────────────────
+    if [ -f /usr/lib/libcdsprpc.so ] && nm -D /usr/lib/libcdsprpc.so 2>/dev/null | grep 'T remote_handle64_open' >/dev/null 2>&1; then
+        ok "libcdsprpc.so already deployed (has remote_handle64_open)"
+    else
+        log "Building fastrpc user-space library…"
+        apt install -y autoconf automake libtool pkg-config build-essential >/dev/null 2>&1 || true
+        mkdir -p "$NPU_RE"
+        if [ ! -d "$NPU_RE/fastrpc" ]; then
+            as_user git clone -b development https://github.com/qualcomm/fastrpc.git "$NPU_RE/fastrpc"
+        fi
+        as_user bash -c "cd '$NPU_RE/fastrpc' && chmod +x autogen.sh && bash autogen.sh && ./configure --prefix=/usr/local && make -j\$(nproc)"
+        cp -f "$NPU_RE/fastrpc/src/.libs/libcdsprpc.so"* /usr/lib/
+        ldconfig
+        ok "libcdsprpc.so built and deployed"
+    fi
+
+    # ── 8e — Verify CDSP firmware ───────────────────────────────────────
+    local CDSP_FW="/lib/firmware/qcom/x1e80100/microsoft/Denali/qccdsp8380.mbn"
+    if [ -f "$CDSP_FW" ]; then
+        ok "CDSP firmware present ($(strings "$CDSP_FW" | grep -o 'CDSP.HT.[0-9.a-z_-]*' | head -1))"
+    else
+        warn "CDSP firmware missing at $CDSP_FW"
+        warn "  The remoteproc expects: $(cat /sys/class/remoteproc/remoteproc1/firmware 2>/dev/null)"
+        warn "  This firmware is device-specific (Surface Pro 11 'Denali') and cannot be auto-downloaded."
+        warn "  See NPU.md Layer 4 for deployment instructions."
+    fi
+
+    # ── 8f — Download QAIRT SDK ─────────────────────────────────────────
+    local QAIRT_ROOT="$REAL_HOME/qairt/$QAIRT_VER"
+    if [ -f "$QAIRT_ROOT/lib/hexagon-v73/unsigned/libQnnHtpV73Skel.so" ]; then
+        ok "QAIRT SDK $QAIRT_VER already installed"
+    else
+        log "Downloading QAIRT SDK $QAIRT_VER (~1.5 GB)…"
+        as_user bash -c "cd /tmp && wget -O qairt.zip '$QAIRT_URL' && unzip -q -o qairt.zip -d '$REAL_HOME/qairt' && rm qairt.zip"
+        # The zip extracts to qairt-linux-aarch64-VERSION
+        if [ -d "$REAL_HOME/qairt/qairt-linux-aarch64-$QAIRT_VER" ]; then
+            as_user mv "$REAL_HOME/qairt/qairt-linux-aarch64-$QAIRT_VER" "$QAIRT_ROOT"
+        fi
+        if [ -f "$QAIRT_ROOT/lib/hexagon-v73/unsigned/libQnnHtpV73Skel.so" ]; then
+            ok "QAIRT SDK $QAIRT_VER installed at $QAIRT_ROOT"
+        else
+            warn "QAIRT SDK download may have failed — check $REAL_HOME/qairt/"
+        fi
+    fi
+    # Set up environment variables for the real user
+    if ! grep -q 'QNN_SDK_ROOT' "$REAL_HOME/.bashrc" 2>/dev/null; then
+        cat >> "$REAL_HOME/.bashrc" << EOF
+export QAIRT_SDK_ROOT=\$HOME/qairt/$QAIRT_VER
+export QNN_SDK_ROOT=\$HOME/qairt/$QAIRT_VER
+EOF
+        ok "QNN_SDK_ROOT added to ~/.bashrc"
+    fi
+
+    # ── 8g — Deploy QNN HTP skeleton from QAIRT SDK ─────────────────────
+    if [ -f "$QAIRT_ROOT/lib/hexagon-v73/unsigned/libQnnHtpV73SkelDrv.so" ]; then
+        cp -f "$QAIRT_ROOT/lib/hexagon-v73/unsigned/libQnnHtpV73SkelDrv.so" "$DSP_DIR/"
+        mkdir -p /usr/share/fastrpc
+        cp -f "$QAIRT_ROOT/lib/hexagon-v73/unsigned/libQnnHtpV73SkelDrv.so" /usr/share/fastrpc/
+        ok "QNN HTP v73 skeleton deployed"
+    elif [ -f "$DSP_DIR/libQnnHtpV73SkelDrv.so" ]; then
+        ok "QNN HTP v73 skeleton already deployed"
+    else
+        warn "libQnnHtpV73SkelDrv.so not available — QAIRT SDK may be needed"
+    fi
+
+    # ── 8h — Verify DSP-side C runtime ──────────────────────────────────
+    local dsp_libc_ok=true
+    for lib in libc.so libgcc.so; do
+        if [ ! -f "$DSP_DIR/$lib" ]; then
+            dsp_libc_ok=false
+            warn "DSP $lib missing at $DSP_DIR/ — needed by skeleton libraries at runtime"
+        fi
+    done
+    if $dsp_libc_ok; then
+        ok "DSP-side C runtime present (libc.so, libgcc.so)"
+    else
+        warn "  These come from the Hexagon SDK target/hexagon/lib/v73/G0/pic/ directory."
+        warn "  See NPU.md Layer 4 for details."
+    fi
+
+    # ── 8i — Build llama.cpp ────────────────────────────────────────────
+    local PKG_DIR="$NPU_RE/llama.cpp/pkg-snapdragon"
+    if [ -x "$PKG_DIR/bin/llama-cli" ]; then
+        ok "llama.cpp pkg-snapdragon already built"
+    else
+        log "Building llama.cpp with Hexagon backend…"
+        apt install -y cmake clang build-essential >/dev/null 2>&1 || true
+
+        # Clone llama.cpp
+        if [ ! -d "$NPU_RE/llama.cpp/.git" ]; then
+            as_user git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$NPU_RE/llama.cpp"
+        fi
+
+        # Copy build presets
+        as_user cp "$SCRIPT_DIR/npu/CMakeUserPresets.json" "$NPU_RE/llama.cpp/"
+
+        # Set up environment for cmake
+        local CMAKE_ENV="HEXAGON_SDK_ROOT=\"$QAIRT_ROOT\" HEXAGON_TOOLS_ROOT=\"$QAIRT_ROOT/bin/x86_64-linux-clang\""
+
+        # Configure + build
+        if as_user bash -c "cd '$NPU_RE/llama.cpp' && export $CMAKE_ENV && \
+                cmake -B build-snapdragon --preset arm64-linux-snapdragon-release -DGGML_HEXAGON=ON && \
+                cmake --build build-snapdragon --config Release -j\$(nproc)"; then
+            ok "llama.cpp built successfully"
+        else
+            warn "llama.cpp build failed — the Hexagon DSP skeleton compiler may be missing."
+            warn "  If the host-side build succeeded, you can still create a CPU-only package."
+            warn "  For full HTP0 support, you need the Hexagon SDK for the DSP skeleton."
+            warn "  See NPU.md Layer 6 for details."
+        fi
+
+        # Package into pkg-snapdragon
+        if [ -f "$NPU_RE/llama.cpp/build-snapdragon/bin/llama-cli" ]; then
+            log "Packaging into pkg-snapdragon…"
+            as_user bash -c "cd '$NPU_RE/llama.cpp' && \
+                mkdir -p pkg-snapdragon/bin pkg-snapdragon/lib && \
+                cp build-snapdragon/bin/llama-cli pkg-snapdragon/bin/ && \
+                cp build-snapdragon/bin/llama-server pkg-snapdragon/bin/ 2>/dev/null || true && \
+                cp build-snapdragon/bin/libggml*.so build-snapdragon/bin/libllama*.so \
+                   build-snapdragon/bin/libmtmd*.so pkg-snapdragon/lib/ 2>/dev/null || true && \
+                cp build-snapdragon/ggml/src/ggml-hexagon/libggml-htp-v73.so pkg-snapdragon/lib/ 2>/dev/null || true"
+
+            # Deploy ggml skeleton to DSP search paths
+            if [ -f "$NPU_RE/llama.cpp/build-snapdragon/ggml/src/ggml-hexagon/libggml-htp-v73.so" ]; then
+                cp -f "$NPU_RE/llama.cpp/build-snapdragon/ggml/src/ggml-hexagon/libggml-htp-v73.so" "$DSP_DIR/"
+                cp -f "$NPU_RE/llama.cpp/build-snapdragon/ggml/src/ggml-hexagon/libggml-htp-v73.so" /usr/lib/dsp/
+                ok "ggml HTP v73 skeleton deployed to DSP search paths"
+            fi
+            ok "pkg-snapdragon packaged at $PKG_DIR"
+        else
+            warn "llama-cli binary not found — build may have failed"
+        fi
+    fi
+
+    # ── 8j — Download default model ─────────────────────────────────────
+    local MODEL_DIR="$NPU_RE/llama-hexagon"
+    local MODEL_FILE="$MODEL_DIR/Llama-3.2-1B-Instruct-Q4_0.gguf"
+    if [ -f "$MODEL_FILE" ]; then
+        ok "Llama-3.2-1B model already downloaded"
+    else
+        log "Downloading Llama-3.2-1B-Instruct-Q4_0 (~738 MB)…"
+        mkdir -p "$MODEL_DIR"
+        as_user wget -c -O "$MODEL_FILE" "$LLAMA_MODEL_URL" || \
+            warn "Model download failed — test_llama.sh will retry automatically"
+        [ -f "$MODEL_FILE" ] && ok "Model downloaded" || true
+    fi
+
+    # ── 8k — Summary ────────────────────────────────────────────────────
     echo
-    echo "${C_DIM}  QNN SDK download + llama.cpp build are not automated."
-    echo "  See NPU.md for the full build/run instructions.${C_RST}"
+    echo "${C_BOLD}NPU setup status:${C_RST}"
+    local cdsprpc_ok="✗ MISSING"
+    [ -f /usr/lib/libcdsprpc.so ] && nm -D /usr/lib/libcdsprpc.so 2>/dev/null | grep 'T remote_handle64_open' >/dev/null 2>&1 && cdsprpc_ok="✓ patched"
+    echo "  ${C_DIM}CDSP firmware:${C_RST}    $([ -f "$CDSP_FW" ] && echo '✓ present' || echo '✗ MISSING — see NPU.md')"
+    echo "  ${C_DIM}fastrpc shell:${C_RST}    $([ -f "$DSP_DIR/fastrpc_shell_unsigned_3" ] && echo '✓ present' || echo '✗ MISSING')"
+    echo "  ${C_DIM}libcdsprpc.so:${C_RST}    $cdsprpc_ok"
+    echo "  ${C_DIM}QNN skeleton:${C_RST}     $([ -f "$DSP_DIR/libQnnHtpV73SkelDrv.so" ] && echo '✓ present' || echo '✗ MISSING')"
+    echo "  ${C_DIM}DSP libc/libgcc:${C_RST}  $([ -f "$DSP_DIR/libc.so" ] && [ -f "$DSP_DIR/libgcc.so" ] && echo '✓ present' || echo '✗ MISSING — see NPU.md')"
+    echo "  ${C_DIM}ggml skeleton:${C_RST}    $([ -f "$DSP_DIR/libggml-htp-v73.so" ] && echo '✓ present' || echo '✗ will be built by llama.cpp')"
+    echo "  ${C_DIM}llama-cli:${C_RST}        $([ -x "$PKG_DIR/bin/llama-cli" ] && echo '✓ built' || echo '✗ not built')"
+    echo "  ${C_DIM}model:${C_RST}            $([ -f "$MODEL_FILE" ] && echo '✓ downloaded' || echo '✗ not downloaded')"
+    echo
+    echo "${C_DIM}  Run: ./scripts/test_llama.sh${C_RST}"
+    echo "${C_DIM}  Or:  cd ~/npu-re && sudo bash test_env.sh  (14-check prerequisite test)${C_RST}"
 }
 
 # ══════════════════════════════════════════════════════════════════════════

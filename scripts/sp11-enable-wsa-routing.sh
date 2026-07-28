@@ -134,6 +134,16 @@ enable_wsa_routing() {
 	amixer -c "$CARD" sset 'WSA WSA_RX0 INP0' RX0 >/dev/null 2>&1 || true
 	amixer -c "$CARD" sset 'WSA WSA_RX1 INP0' RX1 >/dev/null 2>&1 || true
 
+	log "Enabling WSA884x speaker amplifier switches ..."
+	for side in SpkrLeft SpkrRight; do
+		amixer -c "$CARD" sset "$side COMP" on >/dev/null 2>&1 || true
+		amixer -c "$CARD" sset "$side BOOST" on >/dev/null 2>&1 || true
+		amixer -c "$CARD" sset "$side DAC" on >/dev/null 2>&1 || true
+		amixer -c "$CARD" sset "$side PBR" on >/dev/null 2>&1 || true
+		amixer -c "$CARD" sset "$side VISENSE" off >/dev/null 2>&1 || true
+		amixer -c "$CARD" sset "$side WSA MODE" Speaker >/dev/null 2>&1 || true
+	done
+
 	log "Setting speaker hardware volume to ${SPEAKER_VOLUME}% ..."
 	amixer -c "$CARD" sset 'Speakers' "${SPEAKER_VOLUME}%" >/dev/null 2>&1 || true
 
