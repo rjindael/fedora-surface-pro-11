@@ -1,0 +1,13 @@
+[Unit]
+Description=Create sensor platform info for hexagonrpcd
+DefaultDependencies=no
+Before=hexagonrpcd.service
+After=sysinit.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'mkdir -p /run/sensors-platform && echo CRD > /run/sensors-platform/hw_platform && echo 555 > /run/sensors-platform/soc_id && echo 2.1 > /run/sensors-platform/revision && touch /run/sensors-platform/platform_subtype /run/sensors-platform/platform_subtype_id /run/sensors-platform/platform_version'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target

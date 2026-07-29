@@ -39,7 +39,7 @@ Prefer step-by-step? The **manual instructions** for each component follow below
 | Flex Keyboard | ✅ | Type Cover touchpad and keyboard work when attached |
 | Suspend / Resume | ✅ | `s2idle` working via lid-switch daemon (close → backlight off → 60s → suspend → power-button resume). Requires `cpu-sleep-0` cpuidle workaround (`pm_test`-bisected root cause) + hexagonrpcd suspend-hook condition fix. See [SUSPEND.md](SUSPEND.md). |
 | Cameras (and status LEDs) | ❌ | Not working |
-| Sensors | ⚠️ Partial | **Tablet mode switch** ✅ (SSAM TC 0x1E). **Accelerometer** ❌, **Gyroscope** ❌, **Magnetometer** ❌, **Ambient light** ❌ — all behind SSAM vendor HID device (`045E:09CF`, pages 0xFF05/0xFF0B). No ARM64 SSAM sensor driver exists in mainline or linux-surface. Requires reverse-engineering of vendor HID protocol. |
+| Sensors | ✅ Working | **Accelerometer** ✅ (LSM6DSV, X/Y/Z via SSC/QMI). **Gyroscope** ✅. **Magnetometer** ✅ (AK0991x). **Ambient light** ✅ (TCS3430). **Tablet mode** ✅ (SSAM). Pre-parsed registry from Windows DriverData + custom hexagonrpcd with early start. See [SENSORS.md](SENSORS.md). |
 | NPU — CPU inference | ✅ | llama.cpp CPU inference working via QNN SDK + Hexagon backend build |
 | NPU — DSP (HTP0) offload | ✅ | llama.cpp runs on Hexagon NPU via `--device HTP0`. Verified: Llama-3.2-1B (~48 t/s), Qwen2.5-Coder-3B (~21 t/s). CDSP remoteproc reset recommended before each run to defragment rpcmem heap. See [NPU.md](NPU.md). |
 
@@ -53,6 +53,7 @@ Prefer step-by-step? The **manual instructions** for each component follow below
 | [PEN.md](PEN.md) | Stylus findings (hybrid HEAT auto-switching daemon) |
 | [SUSPEND.md](SUSPEND.md) | Suspend/resume findings (lid daemon + wake policy + DSP hooks) |
 | [NPU.md](NPU.md) | NPU findings (QNN SDK + llama.cpp Hexagon backend) |
+| [SENSORS.md](SENSORS.md) | Sensor setup (SSC/QMI, hexagonrpcd, Windows registry, libssc) |
 
 ---
 
@@ -427,12 +428,49 @@ journalctl -b 0 -g sp11-cpuidle-s2idle # hook fired (disabled pre, enabled post)
 ```
 
 ---
+## Step 8 — Sensors (accelerometer, gyroscope, magnetometer, ALS)
 
-## Step 8 — NPU AI (llama.cpp via QNN)
+> Details: [SENSORS.md](SENSORS.md)
+
+Sensors are managed by the ADSP's Snapdragon Sensor Core (SSC) framework and accessed via QMI over QRTR. The key requirement is copying the pre-parsed sensor registry from the Windows partition — this lets the SNS framework initialise sensors without `oemconfig.so`.
+
+```bash
+sudo ./install.sh --sensors
+```
+
+This installs:
+- hexagonrpcd with early-start systemd service (`After=sysinit.target`)
+- Sensor config JSONs from Windows DriverStore
+- Pre-parsed sensor registry (321 files) from Windows DriverData
+- Custom hexagonrpcd build (method 24 stub + write support)
+- libssc + ssccli for QMI sensor access
+- `sensors-platform-info.service` (platform ID files for hexagonrpcd)
+
+**Reboot** after installation — the SNS framework reads the registry only during ADSP boot.
+
+Verify:
+
+```bash
+./scripts/test_sensors.sh
+
+# Or test individual sensors:
+export LD_LIBRARY_PATH="/usr/local/lib/aarch64-linux-gnu"
+ssccli --sensor accelerometer --timeout 10
+ssccli --sensor light --timeout 10
+```
+
+> **Note:** hexagonrpcd may crash after initialising sensors (non-fatal `fstempfile` write errors). Sensors stay alive because the SNS framework runs on the ADSP independently. `Restart=always` keeps hexagonrpcd reconnecting.
+
+> **WARNING:** Do NOT reset the ADSP via `echo stop > /sys/class/remoteproc/remoteproc0/state` — this crashes the entire SoC. Use a normal reboot to restart the ADSP.
+
+---
+
+
+## Step 9 — NPU AI (llama.cpp via QNN)
 
 > Details: [NPU.md](NPU.md)
 
-### 8a. FastRPC device permissions
+### 9a. FastRPC device permissions
 
 ```bash
 sudo cp udev/99-fastrpc.rules /etc/udev/rules.d/
@@ -440,14 +478,14 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger
 ```
 
-### 8b. Install hexagonrpcd (DSP daemon)
+### 9b. Install hexagonrpcd (DSP daemon)
 
 ```bash
 sudo apt install -y hexagonrpcd hexagon-dsp-binaries-qualcomm-hamoa-iot-evk libhexagonrpc-dev
 sudo systemctl enable hexagonrpcd.service
 ```
 
-### 8c. Install QNN SDK
+### 9c. Install QNN SDK
 
 Download the **Qualcomm AI Runtime (QAIRT) SDK** v2.48.0.260626 (Community edition, all platforms):
 
@@ -474,7 +512,7 @@ export QNN_SDK_ROOT=$HOME/qairt/2.48.0.260626
 EOF
 ```
 
-### 8d. Build llama.cpp with Hexagon backend
+### 9d. Build llama.cpp with Hexagon backend
 
 ```bash
 git clone https://github.com/ggml-org/llama.cpp.git ~/llama.cpp
@@ -488,7 +526,7 @@ cmake -B build-snapdragon --preset arm64-linux-snapdragon -DGGML_HEXAGON=ON
 cmake --build build-snapdragon --config Release -j$(nproc)
 ```
 
-### 8e. Run on the NPU (HTP0 device)
+### 9e. Run on the NPU (HTP0 device)
 
 ```bash
 export LD_LIBRARY_PATH="\

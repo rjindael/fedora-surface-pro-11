@@ -58,24 +58,25 @@ user_systemctl() { systemctl --user -M "${REAL_USER}@.host" "$@"; }
 
 # ── phase flags ───────────────────────────────────────────────────────────
 DO_GRUB=false; DO_WIFI=false; DO_AUDIO=false; DO_PEN=false
-DO_SUSPEND=false; DO_NPU=false; DO_KERNEL=false
+DO_SUSPEND=false; DO_NPU=false; DO_SENSORS=false; DO_KERNEL=false
 DO_UNINSTALL=false
 EXPLICIT=false
 
 USAGE="Usage: sudo ./install.sh [PHASE...] [--kernel]
-Phases: --all --grub --wifi --audio --pen --suspend --npu --kernel
+Phases: --all --grub --wifi --audio --pen --suspend --sensors --npu --kernel
         --uninstall --list  (default: --all)"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --all)      DO_GRUB=true; DO_WIFI=true; DO_AUDIO=true; DO_PEN=true
-                    DO_SUSPEND=true; DO_NPU=true ;;
+                    DO_SUSPEND=true; DO_SENSORS=true; DO_NPU=true ;;
         --grub)     DO_GRUB=true;    EXPLICIT=true ;;
         --wifi)     DO_WIFI=true;    EXPLICIT=true ;;
         --audio)    DO_AUDIO=true;   EXPLICIT=true ;;
         --pen)      DO_PEN=true;     EXPLICIT=true ;;
         --suspend)  DO_SUSPEND=true; EXPLICIT=true ;;
         --npu)      DO_NPU=true;     EXPLICIT=true ;;
+        --sensors) DO_SENSORS=true; EXPLICIT=true ;;
         --kernel)   DO_KERNEL=true;  EXPLICIT=true ;;
         --uninstall) DO_UNINSTALL=true ;;
         --list)     echo "$USAGE"; echo; echo "Available phases:"; \
@@ -84,6 +85,7 @@ while [ $# -gt 0 ]; do
                     echo "  audio     DSP firmware + topology + UCM2 + boot-race fix + PipeWire sink"; \
                     echo "  pen       Stylus daemon (udev + build + service)"; \
                     echo "  suspend   cpu-sleep-0 fix + hexagonrpcd hooks + lid daemon"; \
+                    echo "  sensors   hexagonrpcd + sensor config/registry from Windows + libssc"; \
                     echo "  npu       FastRPC + QNN SDK + DSP runtime + llama.cpp build + model download"
                     echo "  kernel    Build & install patched kernel (long; needs ~20 GB)"; \
                     exit 0 ;;
@@ -96,7 +98,7 @@ done
 # Default: --all (but not --kernel)
 if ! $EXPLICIT && ! $DO_UNINSTALL; then
     DO_GRUB=true; DO_WIFI=true; DO_AUDIO=true; DO_PEN=true
-    DO_SUSPEND=true; DO_NPU=true
+    DO_SUSPEND=true; DO_SENSORS=true; DO_NPU=true
 fi
 
 # ── privilege check ───────────────────────────────────────────────────────
@@ -123,6 +125,11 @@ if $DO_UNINSTALL; then
     rm -f /usr/local/sbin/sp11-{lid-backlight,pen-daemon,enable-suspend-debug,enable-wsa-routing,wifi-board-fixup,grab-fw,fix-cpuidle-s2idle}
     rm -f /usr/lib/systemd/system-sleep/sp11-cpuidle-s2idle
     rm -rf /etc/systemd/system/hexagonrpcd-{suspend,resume}.service.d
+    systemctl disable --now sensors-platform-info.service 2>/dev/null || true
+    rm -f /etc/systemd/system/sensors-platform-info.service
+    rm -f /etc/systemd/system/hexagonrpcd.service
+    rm -rf /etc/systemd/system/hexagonrpcd.service.d
+    rm -rf /usr/share/qcom/x1e80100/Microsoft/Surface-Pro-11/sensors
     rm -f /etc/udev/rules.d/99-{sp11-pen,fastrpc}.rules
     rm -f /etc/apt/apt.conf.d/99surface-pro-11-wifi-fixup
     rm -f /etc/default/grub.d/{99-surface-pro-11,98-sp11-timeout,ubuntu-x1e-settings}.cfg
@@ -539,6 +546,141 @@ EOF
     echo "${C_DIM}  Run: ./scripts/test_llama.sh${C_RST}"
     echo "${C_DIM}  Or:  cd ~/npu-re && sudo bash test_env.sh  (14-check prerequisite test)${C_RST}"
 }
+# ══════════════════════════════════════════════════════════════════════════
+# STEP — SENSORS (hexagonrpcd + config + libssc)
+# ══════════════════════════════════════════════════════════════════════════
+install_sensors() {
+    phase "Sensors (SSC/QMI via hexagonrpcd + libssc)"
+
+    local SNS_ROOT="/usr/share/qcom/x1e80100/Microsoft/Surface-Pro-11"
+
+    # ── packages ──
+    log "Installing hexagonrpcd packages"
+    apt-get install -y hexagonrpcd libhexagonrpc0.4 2>/dev/null || true
+
+    # ── mount Windows partition ──
+    local WIN="/mnt/windows"
+    if ! mountpoint -q "$WIN"; then
+        local winpart
+        winpart="$(lsblk -lno NAME,FSTYPE | awk '$2=="ntfs"{print "/dev/"$1; exit}')"
+        [ -n "$winpart" ] || die "Cannot find Windows NTFS partition"
+        log "Mounting $winpart at $WIN (read-only)"
+        mount -t ntfs3 -o ro "$winpart" "$WIN" 2>/dev/null || \
+            mount -t ntfs-3g -o ro "$winpart" "$WIN" 2>/dev/null || \
+            mount -o ro "$winpart" "$WIN"
+    fi
+
+    # ── sensor config (JSON files from Windows DriverStore) ──
+    local DRVDIR="$WIN/Windows/System32/DriverStore/FileRepository"
+    local SNSCFG
+    SNSCFG="$(ls -d "$DRVDIR"/surfacepro_snscfgcrd8380.inf_* 2>/dev/null | head -1)"
+    [ -n "$SNSCFG" ] || die "Cannot find surfacepro_snscfgcrd8380.inf in Windows DriverStore"
+
+    log "Copying sensor config JSONs from Windows DriverStore"
+    mkdir -p "$SNS_ROOT/sensors/config" "$SNS_ROOT/sensors/registry"
+    cp "$SNSCFG"/*.json "$SNS_ROOT/sensors/config/"
+    cp "$SNSCFG"/json.lst "$SNS_ROOT/sensors/config/" 2>/dev/null || true
+    cp "$SNSCFG"/golden_color_calibration.bin "$SNS_ROOT/sensors/config/" 2>/dev/null || true
+
+    # ── sns_reg.conf ──
+    log "Deploying sns_reg.conf"
+    install_file sensors/sns_reg.conf "$SNS_ROOT/sensors/sns_reg.conf"
+
+    # ── pre-parsed registry (from Windows DriverData) ──
+    local FSTRPC="$WIN/Windows/System32/drivers/DriverData/Qualcomm/fastRPC"
+    if [ -d "$FSTRPC/persist/sensors/registry/registry" ]; then
+        log "Copying pre-parsed sensor registry from Windows DriverData (321 files)"
+        cp "$FSTRPC"/persist/sensors/registry/registry/* "$SNS_ROOT/sensors/registry/"
+        cp "$FSTRPC"/persist/sensors/registry/parsed_file_list.csv "$SNS_ROOT/sensors/registry/" 2>/dev/null || true
+        cp "$FSTRPC"/persist/sensors/registry/sns_reg_version "$SNS_ROOT/sensors/registry/" 2>/dev/null || true
+        ok "Registry: $(ls "$SNS_ROOT/sensors/registry/" | wc -l) files"
+    else
+        warn "Windows DriverData/fastRPC not found — registry copy skipped"
+        warn "Sensors will NOT work without the pre-parsed registry"
+    fi
+
+    # ── Surface-specific calibration from Windows ──
+    if [ -d "$FSTRPC/vendor/etc/sensors/config" ]; then
+        log "Copying Surface calibration files"
+        cp "$FSTRPC"/vendor/etc/sensors/config/* "$SNS_ROOT/sensors/config/" 2>/dev/null || true
+    fi
+
+    # ── permissions ──
+    chown -R fastrpc:fastrpc "$SNS_ROOT/sensors/"
+
+    # ── custom hexagonrpcd (method 24 + write support) ──
+    log "Building custom hexagonrpcd with method 24 + write support"
+    if ! command -v meson >/dev/null 2>&1; then
+        apt-get install -y meson ninja-build gcc pkg-config libhexagonrpc-dev 2>/dev/null || true
+    fi
+    local HEXSRC="$SCRIPT_DIR/hexagonrpc-src"
+    if [ ! -d "$HEXSRC" ]; then
+        git clone https://github.com/linux-msm/hexagonrpc.git "$HEXSRC" 2>/dev/null || true
+    fi
+
+    if [ -d "$HEXSRC" ]; then
+        # Apply patches for method 24 + write support
+        # (These are already applied if this repo includes the patched source)
+        if [ -f "$HEXSRC/hexagonrpcd/apps_std.c" ] && ! grep -q 'mkdir_stub' "$HEXSRC/hexagonrpcd/apps_std.c"; then
+            warn "hexagonrpcd source needs patches — see SENSORS.md for manual build instructions"
+        else
+            meson setup "$HEXSRC/build" "$HEXSRC" 2>/dev/null || true
+            ninja -C "$HEXSRC/build" 2>/dev/null && {
+                cp "$HEXSRC/build/hexagonrpcd/hexagonrpcd" /usr/libexec/hexagonrpc/hexagonrpcd
+                chown root:root /usr/libexec/hexagonrpc/hexagonrpcd
+                chmod 755 /usr/libexec/hexagonrpc/hexagonrpcd
+                ok "Custom hexagonrpcd installed"
+            } || warn "hexagonrpcd build failed — stock version will be used (sensors still work)"
+        fi
+    else
+        warn "Could not clone hexagonrpc — stock hexagonrpcd will be used"
+        warn "Sensors still work but hexagonrpcd will crash after init (non-fatal)"
+    fi
+
+    # ── systemd services ──
+    log "Installing systemd services"
+    install_file systemd/sensors-platform-info.service /etc/systemd/system/sensors-platform-info.service
+    install_file systemd/hexagonrpcd-sensors.service /etc/systemd/system/hexagonrpcd.service
+
+    # hexagonrpcd env override
+    mkdir -p /etc/systemd/system/hexagonrpcd.service.d
+    cat > /etc/systemd/system/hexagonrpcd.service.d/override.conf << 'CONF'
+[Service]
+Environment="hexagonrpcd_device=/dev/fastrpc-adsp"
+Environment="hexagonrpcd_dsp=adsp"
+Environment="hexagonrpcd_fw_dir=/usr/share/qcom/x1e80100/Microsoft/Surface-Pro-11/"
+Environment="hexagonrpcd_extra=-s"
+CONF
+
+    systemctl daemon-reload
+    systemctl enable sensors-platform-info.service hexagonrpcd.service
+    ok "Systemd services installed (early start + restart=always)"
+
+    # ── libssc (QMI sensor client) ──
+    log "Installing libssc + ssccli"
+    apt-get install -y meson ninja-build libglib2.0-dev libgstreamer1.0-dev \
+        libgstreamer-plugins-base1.0-dev libudev-dev libqmi-glib-dev libqrtr-glib-dev 2>/dev/null || true
+
+    local LIBSSC_SRC="$SCRIPT_DIR/libssc-src"
+    if [ ! -d "$LIBSSC_SRC" ]; then
+        git clone https://github.com/DakkesheshRC/libssc.git "$LIBSSC_SRC" 2>/dev/null || true
+    fi
+    if [ -d "$LIBSSC_SRC" ]; then
+        meson setup "$LIBSSC_SRC/build" "$LIBSSC_SRC" 2>/dev/null || true
+        ninja -C "$LIBSSC_SRC/build" 2>/dev/null && {
+            ninja -C "$LIBSSC_SRC/build" install 2>/dev/null
+            ldconfig
+            ok "libssc + ssccli installed"
+        } || warn "libssc build failed — install manually (see SENSORS.md)"
+    else
+        warn "Could not clone libssc — install manually"
+    fi
+
+    ok "Sensor installation complete"
+    warn "→ Reboot required for sensors to initialise"
+}
+
+
 
 # ══════════════════════════════════════════════════════════════════════════
 # RUN
@@ -550,6 +692,7 @@ $DO_AUDIO   && install_audio
 $DO_PEN     && install_pen
 $DO_SUSPEND && install_suspend
 $DO_NPU     && install_npu
+$DO_SENSORS && install_sensors
 
 # ── summary ───────────────────────────────────────────────────────────────
 echo
@@ -557,6 +700,7 @@ echo "${C_BOLD}${C_GREEN}═══ Done ═══${C_RST}"
 $DO_AUDIO  && echo "  ${C_YELLOW}→ Reboot for audio to take effect${C_RST}"
 $DO_KERNEL && echo "  ${C_YELLOW}→ Reboot to use the new kernel${C_RST}"
 $DO_GRUB   && echo "  ${C_YELLOW}→ Reboot for new kernel arguments${C_RST}"
+$DO_SENSORS && echo "  ${C_YELLOW}→ Reboot for sensors to initialise${C_RST}"
 echo
 echo "Verify with:  ${C_BOLD}sudo ./install.sh --list${C_RST}  (phase list)"
 echo "Full checklist: see README.md → Verification checklist"

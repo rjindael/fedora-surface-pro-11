@@ -1,0 +1,42 @@
+[Unit]
+Description=Hexagon DSP sensors daemon
+Documentation=man:hexagonrpcd(1) file:///usr/share/doc/hexagonrpcd/README.Debian
+ConditionKernelVersion=>=6.12
+Conflicts=shutdown.target
+After=sysinit.target sensors-platform-info.service
+Before=shutdown.target
+Wants=sensors-platform-info.service
+
+[Service]
+Type=simple
+NoNewPrivileges=yes
+PrivateTmp=yes
+DevicePolicy=closed
+DeviceAllow=/dev/fastrpc-adsp
+DeviceAllow=/dev/fastrpc-sdsp
+DeviceAllow=/dev/fastrpc-cdsp
+DeviceAllow=/dev/fastrpc-adsp-secure
+DeviceAllow=/dev/fastrpc-sdsp-secure
+DeviceAllow=/dev/fastrpc-cdsp-secure
+ProtectSystem=strict
+ReadWritePaths=/usr/share/qcom/x1e80100/Microsoft/Surface-Pro-11/sensors /run/sensors-platform /tmp
+ProtectHome=read-only
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+PrivateNetwork=yes
+RestrictAddressFamilies=none
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+MemoryDenyWriteExecute=no
+LockPersonality=yes
+CapabilityBoundingSet=
+ExecStart=/usr/bin/hexagonrpcd
+User=fastrpc
+Group=fastrpc
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=sysinit.target

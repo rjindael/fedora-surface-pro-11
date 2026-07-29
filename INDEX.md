@@ -13,6 +13,7 @@ This repository contains everything needed to enable Wi-Fi, touchscreen, stylus,
 | [PEN.md](PEN.md) | Stylus (Surface Slim Pen 2) | Working | Hybrid HEAT/uinput auto-switching daemon, udev symlink, systemd service |
 | [SUSPEND.md](SUSPEND.md) | Suspend / Resume | Partially working | Lid-switch backlight control, power-button-only wake, SSAM debug logging, DSP hooks |
 | [NPU.md](NPU.md) | NPU AI (Hexagon DSP / QNN) | Working | FastRPC permissions, QNN SDK, llama.cpp Hexagon backend, HTP0 offload (48 t/s @ 1B, 21 t/s @ 3B with CDSP reset) |
+| [SENSORS.md](SENSORS.md) | Sensors (accelerometer, gyro, mag, ALS) | Working | SSC/QMI via hexagonrpcd, pre-parsed registry from Windows, custom hexagonrpcd, libssc |
 
 ## Repository Structure
 
@@ -25,7 +26,7 @@ ubuntu-surface-pro-11/
 ├── TOUCHSCREEN.md                      Touchscreen findings and solution
 ├── PEN.md                              Pen/stylus findings and solution
 ├── SUSPEND.md                          Suspend/resume findings and solution
-├── NPU.md                              NPU/AI findings and solution
+├── SENSORS.md                          Sensor setup (SSC, hexagonrpcd, libssc)
 ├── scripts/                            Installation and troubleshooting scripts
 │   ├── sp11-grab-fw.sh                 Download DSP firmware from Windows CABs
 │   ├── sp11-wifi-board-fixup.sh        Extract WCN7850 board data file
@@ -41,7 +42,7 @@ ubuntu-surface-pro-11/
 │   ├── test_vibe.sh                   NPU chat — VibeThinker-1.5B (math/reasoning)
 │   ├── test_llama.sh                  NPU chat — Llama-3.2-1B-Instruct
 │   ├── test_qwen.sh                   NPU chat — Qwen2.5-Coder-3B-Instruct
-│   └── test_gemma.sh                  NPU chat — Gemma-4-E2B-it QAT mobile
+│   └── test_sensors.sh                 Test all sensors via SSC/QMI
 ├── pen-daemon/
 │   └── sp11-pen-daemon.c               Hybrid pen/touch daemon source (compile to binary)
 ├── systemd/                            systemd unit files
@@ -49,7 +50,8 @@ ubuntu-surface-pro-11/
 │   ├── sp11-wsa-routing.service
 │   ├── sp11-pipewire-restart.service
 │   ├── sp11-lid-backlight.service
-│   └── sp11-suspend-debug.service
+│   ├── sensors-platform-info.service   Platform ID files for hexagonrpcd
+│   └── hexagonrpcd-sensors.service     Custom hexagonrpcd early-start service
 ├── udev/                               udev rules
 │   ├── 99-fastrpc.rules                FastRPC NPU device permissions
 │   └── 99-sp11-pen.rules               Stable pen device symlink
@@ -70,9 +72,10 @@ ubuntu-surface-pro-11/
 │   └── ubuntu-x1e-settings.cfg
 ├── apt/
 │   └── 99surface-pro-11-wifi-fixup     apt post-invoke hook for board file
-└── npu/
-    └── CMakeUserPresets.json           llama.cpp Snapdragon build presets
-```
+├── npu/
+│   └── CMakeUserPresets.json           llama.cpp Snapdragon build presets
+└── sensors/
+    └── sns_reg.conf                    Sensor registry config template
 
 ## Quick Start
 
