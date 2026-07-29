@@ -9,6 +9,7 @@
 # Usage: ./test_sensors.sh
 #
 set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 SSCCLI="$(command -v ssccli 2>/dev/null || echo /usr/local/bin/ssccli)"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}:/usr/local/lib/aarch64-linux-gnu"
@@ -65,41 +66,46 @@ echo "  ${D}Sensor configs in $SNS_ROOT/sensors/config/:${N}"
 ls "$SNS_ROOT/sensors/config/"*.json 2>/dev/null | while read -r f; do basename "$f"; done | head -10 | sed 's/^/    /'
 echo ""
 
-# ── 3. Test each sensor ─────────────────────────────────────────────────
+# ── 3. Sensor readings ──────────────────────────────────────────────────
 echo "${B}── Sensor Readings ──${N}"
 
-test_sensor() {
-    local label="$1"
-    local sensor="$2"
-    local timeout="${3:-10}"
+# Use fast C tool if available (1s), fall back to ssccli (20s)
+FAST_READ="$SCRIPT_DIR/sensors/sp11-sensor-read"
+if [ ! -x "$FAST_READ" ]; then
+    FAST_READ="$(dirname "$SCRIPT_DIR")/sensors/sp11-sensor-read"
+fi
 
-    printf "  %-20s " "$label"
-
-    local output
-    output=$(timeout "$((timeout + 3))" "$SSCCLI" --sensor "$sensor" --timeout "$timeout" 2>&1) || true
-
-    local has_data reg_empty
-    grep -q 'measurement' <<< "$output" && has_data=1 || has_data=0
-    grep -q 'unavailable' <<< "$output" && reg_empty=1 || reg_empty=0
-
-    if [ "$has_data" = "1" ]; then
-        echo "${G}DATA${N}"
-        grep -iE 'measurement' <<< "$output" | tail -3 | sed 's/^/                      /'
-    elif [ "$reg_empty" = "1" ]; then
-        echo "${Y}registry empty (reboot to reload)${N}"
-    elif [ -n "$output" ]; then
-        echo "${Y}connected but no data${N}"
+if [ -x "$FAST_READ" ]; then
+    # Fast path: all sensors in parallel, exits after first reading each
+    output=$(LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" timeout 12 "$FAST_READ" 10 2>/dev/null) || true
+    if [ -n "$output" ]; then
+        while IFS= read -r line; do
+            echo "  ${G}✓${N} $line"
+        done <<< "$output"
     else
-        echo "${R}SSC unreachable${N}"
+        echo "  ${R}✗${N} No sensor data (reboot may be needed for ADSP init)"
     fi
-}
-
-test_sensor "Accelerometer" "accelerometer" 5
-test_sensor "Gyroscope" "gyroscope" 5
-test_sensor "Magnetometer" "magnetometer" 5
-test_sensor "Light (ALS)" "light" 5
-test_sensor "Proximity" "proximity" 5
-echo ""
+else
+    # Fallback: sequential ssccli (slower)
+    test_sensor() {
+        local label="$1" sensor="$2" timeout="${3:-5}"
+        printf "  %-20s " "$label"
+        local output
+        output=$(timeout "$((timeout + 3))" "$SSCCLI" --sensor "$sensor" --timeout "$timeout" 2>&1) || true
+        if grep -q 'measurement' <<< "$output"; then
+            echo "${G}DATA${N}"
+        elif grep -q 'unavailable' <<< "$output"; then
+            echo "${Y}registry empty${N}"
+        else
+            echo "${R}unreachable${N}"
+        fi
+    }
+    test_sensor "Accelerometer" "accelerometer" 5
+    test_sensor "Gyroscope" "gyroscope" 5
+    test_sensor "Magnetometer" "magnetometer" 5
+    test_sensor "Light (ALS)" "light" 5
+    test_sensor "Proximity" "proximity" 5
+fi
 
 # ── 4. Direct-access sensors ────────────────────────────────────────────
 echo "${B}── Direct Access Sensors ──${N}"

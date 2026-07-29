@@ -676,6 +676,14 @@ CONF
         warn "Could not clone libssc — install manually"
     fi
 
+
+    # ── Fast sensor reader tool ──
+    log "Building sp11-sensor-read"
+    gcc -O2 -Wall -o "$SCRIPT_DIR/sensors/sp11-sensor-read" \
+        "$SCRIPT_DIR/sensors/sp11-sensor-read.c" \
+        $(pkg-config --cflags --libs libssc 2>/dev/null) 2>/dev/null && \
+        ok "sp11-sensor-read built (reads all sensors in ~1s)" || \
+        warn "sp11-sensor-read build failed (test script will use ssccli fallback)"
     ok "Sensor installation complete"
     warn "→ Reboot required for sensors to initialise"
 }
