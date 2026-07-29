@@ -104,7 +104,6 @@ else
     test_sensor "Gyroscope" "gyroscope" 5
     test_sensor "Magnetometer" "magnetometer" 5
     test_sensor "Light (ALS)" "light" 5
-    test_sensor "Proximity" "proximity" 5
 fi
 
 # ── 4. Direct-access sensors ────────────────────────────────────────────

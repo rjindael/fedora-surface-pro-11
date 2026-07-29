@@ -271,7 +271,7 @@ host-only builds skip it.
 cd ~/npu-re
 git clone https://github.com/ggml-org/llama.cpp.git
 cd llama.cpp
-cp /path/to/ubuntu-surface-pro-11/npu/CMakeUserPresets.json .
+cp ~/ubuntu-surface-pro-11/npu/CMakeUserPresets.json .
 
 # Environment for both host + DSP skeleton build
 export HEXAGON_SDK_ROOT=$QNN_SDK_ROOT          # QAIRT SDK as Hexagon SDK base

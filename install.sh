@@ -684,6 +684,14 @@ CONF
         $(pkg-config --cflags --libs libssc 2>/dev/null) 2>/dev/null && \
         ok "sp11-sensor-read built (reads all sensors in ~1s)" || \
         warn "sp11-sensor-read build failed (test script will use ssccli fallback)"
+    # ── Sensor discovery tool ──
+    log "Building sp11-sensor-discover"
+    gcc -O2 -Wall -o "$SCRIPT_DIR/sensors/sp11-sensor-discover" \
+        "$SCRIPT_DIR/sensors/sp11-sensor-discover.c" \
+        $(pkg-config --cflags --libs libssc 2>/dev/null) 2>/dev/null && \
+        ok "sp11-sensor-discover built" || \
+        warn "sp11-sensor-discover build failed"
+
     ok "Sensor installation complete"
     warn "→ Reboot required for sensors to initialise"
 }

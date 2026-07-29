@@ -6,20 +6,6 @@ Everything needed to reproduce from a stock Ubuntu install is in this repo — s
 
 > **Target device:** Microsoft Surface Pro 11, **OLED display**, **16 GB RAM**, **1 TB NVMe** (no 5G model). SKU `Surface_Pro_11th_Edition_2076`, Snapdragon X 12-core X1E80100 @ 3.40 GHz, UEFI firmware `175.222.235`.
 
-## Quick install
-
-The `install.sh` script automates all post-kernel configuration (Steps 2–8 below):
-
-```bash
-sudo ./install.sh             # install everything (grub, Wi-Fi, audio, pen, suspend, NPU)
-sudo ./install.sh --suspend   # install individual components only
-sudo ./install.sh --kernel    # also build & install the patched kernel (~30 min)
-sudo ./install.sh --list      # list all available phases
-sudo ./install.sh --uninstall # remove everything this script installed
-```
-
-Prefer step-by-step? The **manual instructions** for each component follow below.
-
 ## Status Summary
 
 | **Feature** | **Status** | **Notes** |
@@ -39,7 +25,7 @@ Prefer step-by-step? The **manual instructions** for each component follow below
 | Flex Keyboard | ✅ | Type Cover touchpad and keyboard work when attached |
 | Suspend / Resume | ✅ | `s2idle` working via lid-switch daemon (close → backlight off → 60s → suspend → power-button resume). Requires `cpu-sleep-0` cpuidle workaround (`pm_test`-bisected root cause) + hexagonrpcd suspend-hook condition fix. See [SUSPEND.md](SUSPEND.md). |
 | Cameras (and status LEDs) | ❌ | Not working |
-| Sensors | ✅ Working | **Accelerometer** ✅ (LSM6DSV, X/Y/Z via SSC/QMI). **Gyroscope** ✅. **Magnetometer** ✅ (AK0991x). **Ambient light** ✅ (TCS3430). **Tablet mode** ✅ (SSAM). Pre-parsed registry from Windows DriverData + custom hexagonrpcd with early start. See [SENSORS.md](SENSORS.md). |
+| Sensors | ✅ Working | 13 SSC sensors producing data: accelerometer, gyroscope, magnetometer, ambient light, RGB color, compass, SAR, gravity + rotation + game-rotation vectors, fast/relative motion. **Tablet mode** ✅ via SSAM. Pre-parsed registry from Windows DriverData + custom hexagonrpcd. See [SENSORS.md](SENSORS.md). |
 | NPU — CPU inference | ✅ | llama.cpp CPU inference working via QNN SDK + Hexagon backend build |
 | NPU — DSP (HTP0) offload | ✅ | llama.cpp runs on Hexagon NPU via `--device HTP0`. Verified: Llama-3.2-1B (~48 t/s), Qwen2.5-Coder-3B (~21 t/s). CDSP remoteproc reset recommended before each run to defragment rpcmem heap. See [NPU.md](NPU.md). |
 
@@ -101,6 +87,22 @@ sudo apt install -y \
 
 ---
 
+## Quick install
+
+The `install.sh` script automates all post-kernel configuration (Steps 2–8 below):
+
+```bash
+sudo ./install.sh             # install everything (grub, Wi-Fi, audio, pen, suspend, NPU)
+sudo ./install.sh --suspend   # install individual components only
+sudo ./install.sh --kernel    # also build & install the patched kernel (~30 min)
+sudo ./install.sh --list      # list all available phases
+sudo ./install.sh --uninstall # remove everything this script installed
+```
+
+Prefer step-by-step? The **manual instructions** for each component follow below.
+
+---
+
 ## Step 1 — Build and install the patched kernel
 
 The stock Ubuntu `qcom-x1e` kernel lacks Surface Pro 11 patches. This repo includes all 18 kernel patches.
@@ -122,9 +124,9 @@ git clone --depth 1 --branch jg/ubuntu-qcom-x1e-7.1.3-jg-1 \
 cd ~/linux-sp11
 
 # Apply all Surface Pro 11 patches
-git am /path/to/ubuntu-surface-pro-11/kernel-patches/sp11-touchscreen/*.patch
-git am /path/to/ubuntu-surface-pro-11/kernel-patches/rfkill-wifi-mac/*.patch
-git am /path/to/ubuntu-surface-pro-11/kernel-patches/dmic-clock/*.patch
+git am ~/ubuntu-surface-pro-11/kernel-patches/sp11-touchscreen/*.patch
+git am ~/ubuntu-surface-pro-11/kernel-patches/rfkill-wifi-mac/*.patch
+git am ~/ubuntu-surface-pro-11/kernel-patches/dmic-clock/*.patch
 
 # Configure
 cp /boot/config-$(uname -r) .config
@@ -428,7 +430,7 @@ journalctl -b 0 -g sp11-cpuidle-s2idle # hook fired (disabled pre, enabled post)
 ```
 
 ---
-## Step 8 — Sensors (accelerometer, gyroscope, magnetometer, ALS)
+## Step 8 — Sensors (accelerometer, gyroscope, magnetometer, ambient light & more)
 
 > Details: [SENSORS.md](SENSORS.md)
 
@@ -443,7 +445,8 @@ This installs:
 - Sensor config JSONs from Windows DriverStore
 - Pre-parsed sensor registry (321 files) from Windows DriverData
 - Custom hexagonrpcd build (method 24 stub + write support)
-- `sp11-sensor-read` — fast C tool that reads all sensors in ~1s
+- `sp11-sensor-read` — reads all 13 working sensors (values where the format is known; SAR/color as raw bytes)
+- `sp11-sensor-discover` — lists every detected sensor and verifies it produces data
 - `sensors-platform-info.service` (platform ID files for hexagonrpcd)
 
 **Reboot** after installation — the SNS framework reads the registry only during ADSP boot.
@@ -458,6 +461,9 @@ Verify:
 sensors/sp11-sensor-read                # all sensors
 sensors/sp11-sensor-read accel          # accelerometer only
 sensors/sp11-sensor-read accel light 5  # specific sensors, 5s timeout
+
+# List every detected sensor + verify it produces data:
+sensors/sp11-sensor-discover
 
 # Legacy (slower, one sensor at a time):
 export LD_LIBRARY_PATH="/usr/local/lib/aarch64-linux-gnu"
@@ -522,7 +528,7 @@ EOF
 ```bash
 git clone https://github.com/ggml-org/llama.cpp.git ~/llama.cpp
 cd ~/llama.cpp
-cp /path/to/ubuntu-surface-pro-11/npu/CMakeUserPresets.json .
+cp ~/ubuntu-surface-pro-11/npu/CMakeUserPresets.json .
 
 export HEXAGON_SDK_ROOT=$QNN_SDK_ROOT
 export HEXAGON_TOOLS_ROOT=$QNN_SDK_ROOT/bin/x86_64-linux-clang
@@ -553,7 +559,7 @@ sleep 3
 
 # Offload all layers to the NPU
 ./bin/llama-cli \
-    -m /path/to/model.gguf \
+    -m ~/model.gguf \
     --device HTP0 -ngl 99 \
     -p "The capital of France is" -n 16
 ```

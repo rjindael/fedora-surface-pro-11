@@ -4,15 +4,39 @@ Accelerometer, gyroscope, magnetometer, ambient light sensor, and tablet mode sw
 
 ## Status
 
-| Sensor | Chip | Status | Data Path |
+| Sensor | Data type | Status | Source |
 | --- | --- | --- | --- |
-| Accelerometer | ST LSM6DSV (display) | ✅ Working | SSC → QMI → libssc |
-| Gyroscope | ST LSM6DSV (display) | ✅ Working | SSC → QMI → libssc |
-| Magnetometer | AKM AK0991x | ✅ Working | SSC → QMI → libssc |
-| Ambient Light | AMS TCS3430 | ✅ Working | SSC → QMI → libssc |
-| Proximity | AMS TMD2755 | ⚠ Pending | SSC → QMI (no data yet) |
-| Barometer | ST LPS22DF | Configured | SSC → QMI |
-| Tablet Mode | SAM GPIO | ✅ Working | surface_aggregator sysfs |
+| **Physical sensors** | | | |
+| Accelerometer | `accel` | ✅ Working | ST LSM6DSV (display, SPI) |
+| Gyroscope | `gyro` | ✅ Working | ST LSM6DSV (display, SPI) |
+| Magnetometer | `mag` | ✅ Working | AKM AK0991x (I2C) |
+| Ambient Light | `light` | ✅ Working | AMS TCS3430 (I2C) |
+| RGB Color | `color` | ✅ Data | AMS TCS3430 (TrueTone) |
+| SAR | `sar` | ✅ Data | Body proximity for RF safety |
+| **Fused / virtual sensors** | | | |
+| Gravity | `gravity` | ✅ Data | Accel + gyro fusion |
+| Rotation Vector | `rotv` | ✅ Data | Accel + gyro + mag fusion |
+| Geomag Rot. Vector | `geomag_rv` | ✅ Data | Geomagnetic rotation |
+| Game Rot. Vector | `game_rv` | ✅ Data | Accel + gyro (no mag) |
+| Compass | `compass` | ✅ Data | Heading from magnetometer fusion |
+| **Activity / gesture** | | | |
+| Fast Motion | `fmv` | ✅ Data | Fast motion vector |
+| Relative Motion | `rmd` | ✅ Data | Relative motion detection |
+| **Other** | | | |
+| Tablet Mode | — | ✅ Working | SAM GPIO (surface_aggregator) |
+
+## Not available
+
+Tested against the SSC but not working on this hardware, so excluded from the
+discovery candidate list:
+
+| Data type | Reason |
+| --- | --- |
+| `proximity` (TMD2755) | No SUID — not registered in the SNS framework |
+| `linear_accel`, `pressure`, `significant_motion`, `flat`, `device_orient`, `hinge_angle` | No SUID |
+| `step_detect`, `tilt`, `amd` | Registered (SUID present) but `open` fails — not operable via libssc |
+
+Run `sensors/sp11-sensor-discover` to list every available sensor and verify it produces data.
 
 ## Architecture
 
