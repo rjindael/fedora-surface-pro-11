@@ -50,6 +50,15 @@ else
 fi
 echo ""
 
+# Check uptime — motion sensors need ~60s to init on ADSP
+UPTIME_SEC=$(cut -d. -f1 /proc/uptime)
+if [ "$UPTIME_SEC" -lt 60 ]; then
+    echo "  ${Y}⚠${N} System uptime ${UPTIME_SEC}s — motion sensors need ~60s to init"
+    echo "  ${D}  Waiting for ADSP sensor initialization...${N}"
+    sleep $((60 - UPTIME_SEC))
+    echo "  ${G}✓${N} Wait complete"
+fi
+
 # ── 2. Sensor inventory ─────────────────────────────────────────────────
 echo "${B}── Configured Sensors ──${N}"
 echo "  ${D}Sensor configs in $SNS_ROOT/sensors/config/:${N}"
