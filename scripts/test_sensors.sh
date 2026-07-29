@@ -79,13 +79,13 @@ test_sensor() {
     output=$(timeout "$((timeout + 5))" "$SSCCLI" -v --sensor "$sensor" --timeout "$timeout" 2>&1) || true
 
     local has_data reg_empty ssc_ok
-    echo "$output" | grep -q 'measurement' && has_data=1 || has_data=0
-    echo "$output" | grep -q 'registry.*unavailable' && reg_empty=1 || reg_empty=0
-    echo "$output" | grep -q 'QRTR node discovered' && ssc_ok=1 || ssc_ok=0
+    grep -q 'measurement' <<< "$output" && has_data=1 || has_data=0
+    grep -q 'registry.*unavailable' <<< "$output" && reg_empty=1 || reg_empty=0
+    grep -q 'QRTR node discovered' <<< "$output" && ssc_ok=1 || ssc_ok=0
 
     if [ "$has_data" = "1" ]; then
         echo "${G}DATA${N}"
-        echo "$output" | grep -iE 'measurement' | tail -3 | sed 's/^/                      /'
+        grep -iE 'measurement' <<< "$output" | tail -3 | sed 's/^/                      /'
     elif [ "$ssc_ok" = "1" ] && [ "$reg_empty" = "1" ]; then
         echo "${Y}registry empty (reboot to reload)${N}"
     elif [ "$ssc_ok" = "1" ]; then
