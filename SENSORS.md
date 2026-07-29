@@ -6,10 +6,10 @@ Accelerometer, gyroscope, magnetometer, ambient light sensor, and tablet mode sw
 
 | Sensor | Chip | Status | Data Path |
 | --- | --- | --- | --- |
-| Accelerometer | ST LSM6DSV (display) | ✅ Working | SSC → QMI → ssccli |
-| Gyroscope | ST LSM6DSV (display) | ✅ Working | SSC → QMI → ssccli |
-| Magnetometer | AKM AK0991x | ✅ Working | SSC → QMI → ssccli |
-| Ambient Light | AMS TCS3430 | ✅ Working | SSC → QMI → ssccli |
+| Accelerometer | ST LSM6DSV (display) | ✅ Working | SSC → QMI → libssc |
+| Gyroscope | ST LSM6DSV (display) | ✅ Working | SSC → QMI → libssc |
+| Magnetometer | AKM AK0991x | ✅ Working | SSC → QMI → libssc |
+| Ambient Light | AMS TCS3430 | ✅ Working | SSC → QMI → libssc |
 | Proximity | AMS TMD2755 | ⚠ Pending | SSC → QMI (no data yet) |
 | Barometer | ST LPS22DF | Configured | SSC → QMI |
 | Tablet Mode | SAM GPIO | ✅ Working | surface_aggregator sysfs |
@@ -19,7 +19,7 @@ Accelerometer, gyroscope, magnetometer, ambient light sensor, and tablet mode sw
 ```
 ┌──────────────────────────────────────────────────┐
 │  Linux userspace                                  │
-│  ssccli / libssc  ←  QMI over QRTR  →  sensor data│
+│  sp11-sensor-read / libssc  ←  QMI/QRTR  →  data  │
 ├──────────────────────────────────────────────────┤
 │  hexagonrpcd  ←  /dev/fastrpc-adsp  ←  ADSP      │
 │    -s (attach to sensorspd)                       │
@@ -91,21 +91,28 @@ This installs:
 - Custom hexagonrpcd build (method 24 + write support)
 - Early-start systemd services (`sensors-platform-info`, `hexagonrpcd`)
 - libssc + ssccli (QMI sensor client)
+- `sp11-sensor-read` — fast C tool (reads all sensors in ~1s)
 
 ## Testing
 
 ```bash
+# All sensors at once (~1.5s):
 ./scripts/test_sensors.sh
-```
 
-Or test individual sensors:
+# Fast reader — pick specific sensors:
+sensors/sp11-sensor-read                # all sensors
+sensors/sp11-sensor-read accel          # accelerometer only (0.3s)
+sensors/sp11-sensor-read accel light 5  # two sensors, 5s timeout
 
-```bash
+# Output format: one line per sensor, tab/space separated
+#   accel 1.170 7.510 4.181
+#   gyro 0.0577 0.0384 -0.0508
+#   mag -48.6 4.5 24.0
+#   light 28
+
+# Legacy ssccli (slower, one sensor at a time):
 export LD_LIBRARY_PATH="/usr/local/lib/aarch64-linux-gnu"
 ssccli --sensor accelerometer --timeout 5
-ssccli --sensor gyroscope --timeout 5
-ssccli --sensor magnetometer --timeout 5
-ssccli --sensor light --timeout 5
 ```
 
 ## Platform identification
@@ -134,6 +141,12 @@ These match the sensor config files' `"soc_id": ["555", "635", "615", "616"]` fi
       parsed_file_list.csv          # List of parsed config entries
       8380_crd_*.json.*_platform    # Per-sensor platform + calibration data
       ...                           # (321 files total)
+```
+
+```
+<repo>/sensors/
+  sp11-sensor-read.c               # Fast sensor reader source (libssc API)
+  sp11-sensor-read                 # Compiled binary (built by install.sh --sensors)
 ```
 
 ## Windows sources

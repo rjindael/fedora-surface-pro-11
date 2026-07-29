@@ -443,7 +443,7 @@ This installs:
 - Sensor config JSONs from Windows DriverStore
 - Pre-parsed sensor registry (321 files) from Windows DriverData
 - Custom hexagonrpcd build (method 24 stub + write support)
-- libssc + ssccli for QMI sensor access
+- `sp11-sensor-read` — fast C tool that reads all sensors in ~1s
 - `sensors-platform-info.service` (platform ID files for hexagonrpcd)
 
 **Reboot** after installation — the SNS framework reads the registry only during ADSP boot.
@@ -451,12 +451,17 @@ This installs:
 Verify:
 
 ```bash
+# All sensors (~1.5s):
 ./scripts/test_sensors.sh
 
-# Or test individual sensors:
+# Or use the fast reader directly:
+sensors/sp11-sensor-read                # all sensors
+sensors/sp11-sensor-read accel          # accelerometer only
+sensors/sp11-sensor-read accel light 5  # specific sensors, 5s timeout
+
+# Legacy (slower, one sensor at a time):
 export LD_LIBRARY_PATH="/usr/local/lib/aarch64-linux-gnu"
 ssccli --sensor accelerometer --timeout 10
-ssccli --sensor light --timeout 10
 ```
 
 > **Note:** hexagonrpcd may crash after initialising sensors (non-fatal `fstempfile` write errors). Sensors stay alive because the SNS framework runs on the ADSP independently. `Restart=always` keeps hexagonrpcd reconnecting.

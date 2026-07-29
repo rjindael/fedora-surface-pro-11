@@ -75,7 +75,9 @@ ubuntu-surface-pro-11/
 ├── npu/
 │   └── CMakeUserPresets.json           llama.cpp Snapdragon build presets
 └── sensors/
-    └── sns_reg.conf                    Sensor registry config template
+    ├── sns_reg.conf                    Sensor registry config template
+    ├── sp11-sensor-read.c              Fast sensor reader (libssc API, ~1s)
+    └── sp11-sensor-read                Compiled binary
 
 ## Quick Start
 
