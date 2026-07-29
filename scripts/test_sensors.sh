@@ -53,7 +53,7 @@ echo ""
 # ── 2. Sensor inventory ─────────────────────────────────────────────────
 echo "${B}── Configured Sensors ──${N}"
 echo "  ${D}Sensor configs in $SNS_ROOT/sensors/config/:${N}"
-ls "$SNS_ROOT/sensors/config/"*.json 2>/dev/null | xargs -I{} basename {} | head -10 | sed 's/^/    /'
+ls "$SNS_ROOT/sensors/config/"*.json 2>/dev/null | while read -r f; do basename "$f"; done | head -10 | sed 's/^/    /'
 echo ""
 
 # ── 3. Test each sensor ─────────────────────────────────────────────────
@@ -67,22 +67,20 @@ test_sensor() {
     printf "  %-20s " "$label"
 
     local output
-    output=$(timeout "$((timeout + 5))" "$SSCCLI" --sensor "$sensor" --timeout "$timeout" 2>&1) || true
+    output=$(timeout "$((timeout + 5))" "$SSCCLI" -v --sensor "$sensor" --timeout "$timeout" 2>&1) || true
 
-    local ssc_ok reg_empty has_data
-    echo "$output" | grep 'QRTR node discovered for SSC' >/dev/null 2>&1 && ssc_ok=1 || ssc_ok=0
-    echo "$output" | grep 'registry.*unavailable' >/dev/null 2>&1 && reg_empty=1 || reg_empty=0
-    echo "$output" | grep 'measurement' >/dev/null 2>&1 && has_data=1 || has_data=0
+    local has_data reg_empty ssc_ok
+    echo "$output" | grep -q 'measurement' && has_data=1 || has_data=0
+    echo "$output" | grep -q 'registry.*unavailable' && reg_empty=1 || reg_empty=0
+    echo "$output" | grep -q 'QRTR node discovered' && ssc_ok=1 || ssc_ok=0
 
-    if [ "$ssc_ok" = "1" ]; then
-        if [ "$has_data" = "1" ]; then
-            echo "${G}DATA${N}"
-            echo "$output" | grep -iE 'measurement' | tail -3 | sed 's/^/                      /'
-        elif [ "$reg_empty" = "1" ]; then
-            echo "${Y}registry empty (reboot to reload)${N}"
-        else
-            echo "${Y}connected but no data${N}"
-        fi
+    if [ "$has_data" = "1" ]; then
+        echo "${G}DATA${N}"
+        echo "$output" | grep -iE 'measurement' | tail -3 | sed 's/^/                      /'
+    elif [ "$ssc_ok" = "1" ] && [ "$reg_empty" = "1" ]; then
+        echo "${Y}registry empty (reboot to reload)${N}"
+    elif [ "$ssc_ok" = "1" ]; then
+        echo "${Y}connected but no data${N}"
     else
         echo "${R}SSC unreachable${N}"
     fi
