@@ -76,31 +76,29 @@ test_sensor() {
     printf "  %-20s " "$label"
 
     local output
-    output=$(timeout "$((timeout + 5))" "$SSCCLI" -v --sensor "$sensor" --timeout "$timeout" 2>&1) || true
+    output=$(timeout "$((timeout + 3))" "$SSCCLI" --sensor "$sensor" --timeout "$timeout" 2>&1) || true
 
-    local has_data reg_empty ssc_ok
+    local has_data reg_empty
     grep -q 'measurement' <<< "$output" && has_data=1 || has_data=0
-    grep -q 'registry.*unavailable' <<< "$output" && reg_empty=1 || reg_empty=0
-    grep -q 'QRTR node discovered' <<< "$output" && ssc_ok=1 || ssc_ok=0
+    grep -q 'unavailable' <<< "$output" && reg_empty=1 || reg_empty=0
 
     if [ "$has_data" = "1" ]; then
         echo "${G}DATA${N}"
         grep -iE 'measurement' <<< "$output" | tail -3 | sed 's/^/                      /'
-    elif [ "$ssc_ok" = "1" ] && [ "$reg_empty" = "1" ]; then
+    elif [ "$reg_empty" = "1" ]; then
         echo "${Y}registry empty (reboot to reload)${N}"
-    elif [ "$ssc_ok" = "1" ]; then
+    elif [ -n "$output" ]; then
         echo "${Y}connected but no data${N}"
     else
         echo "${R}SSC unreachable${N}"
     fi
 }
 
-test_sensor "Accelerometer" "accelerometer" 15
-test_sensor "Gyroscope" "gyroscope" 15
-test_sensor "Magnetometer" "magnetometer" 15
-test_sensor "Light (ALS)" "light" 15
-test_sensor "Proximity" "proximity" 15
-
+test_sensor "Accelerometer" "accelerometer" 5
+test_sensor "Gyroscope" "gyroscope" 5
+test_sensor "Magnetometer" "magnetometer" 5
+test_sensor "Light (ALS)" "light" 5
+test_sensor "Proximity" "proximity" 5
 echo ""
 
 # ── 4. Direct-access sensors ────────────────────────────────────────────
