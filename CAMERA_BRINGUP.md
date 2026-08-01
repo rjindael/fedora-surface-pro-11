@@ -76,10 +76,21 @@ partition for exactly this); the last runs from Linux.
    CSI-attached.
 
 1. **Grep the Windows DriverStore for a matching INF.** From Windows itself,
-   elevated `cmd.exe` (no PowerShell needed):
+   **prefer PowerShell's `Select-String` over `findstr`** — many INFs in the
+   DriverStore are UTF-16LE, which plain `findstr` doesn't handle (you'll
+   either get a "Unicode signature... some characters may be lost" warning
+   or silently miss matches); `Select-String` auto-detects per-file encoding:
+   ```powershell
+   Get-ChildItem "C:\Windows\System32\DriverStore\FileRepository" -Recurse -Filter *.inf -ErrorAction SilentlyContinue |
+       Select-String -Pattern "ov02c10","ov02e10","ovti","omnivision","hi846","imx","gc02","gc05" |
+       Select-Object -Unique Path
+   ```
+   If you'd rather stick with `cmd.exe`, `findstr /U` forces UTF-16 mode and
+   fixes the warning — but then assumes *every* matched file is UTF-16, so it
+   can miss the plain-ANSI INFs mixed into the same tree:
    ```cmd
    cd /d C:\Windows\System32\DriverStore\FileRepository
-   findstr /si "ov02 ovti omnivision hi846 imx gc02 gc05" *.inf
+   findstr /si /U "ov02 ovti omnivision hi846 imx gc02 gc05" *.inf
    dir /s /b C:\Windows\System32\DriverStore\FileRepository\*cam*
    ```
    Or the same idea from Linux, on the already-mounted Windows partition
