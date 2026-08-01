@@ -24,16 +24,19 @@ result.
 | Camera platform (tuning loader) | `QCOM0C32` | — | n/a (Linux doesn't need this layer) |
 | Flash/illuminator | `QCOM0C27` | — (see IR section) | unclear — see below |
 | JPEG encoder | `QCOM0C33` | — | n/a for raw capture; needed only for HW JPEG |
-| **Rear camera** | `OVTID858` (`VEN_OVTI&DEV_D858`) | **OmniVision OV13858**, 13MP | **`drivers/media/i2c/ov13858.c` exists**, but ACPI-match only — needs a small `of_device_id` patch (same pattern `ov02c10.c` already has) |
-| **Front camera** | `SONY0681` (`VEN_SONY&DEV_0681`) | **Sony IMX681** | **No mainline driver found anywhere** (checked `drivers/media/i2c/Makefile` — no `imx681.o`; no known out-of-tree source either) |
+| **Rear camera** | `OVTID858` (`VEN_OVTI&DEV_D858`) | **OmniVision OV13858**, 13MP | Mainline `drivers/media/i2c/ov13858.c` exists but ACPI-match only (no devicetree) **and has no power-sequencing code at all** — a real out-of-tree patch adding reset-GPIO/regulator/clock handling exists, see below |
+| **Front camera** | `SONY0681` (`VEN_SONY&DEV_0681`) | **Sony IMX681** | No mainline driver, but a **real, working, devicetree-ready out-of-tree driver exists** — written for a *different* SKU of "Surface Pro 11," see below |
 | **IR camera (Windows Hello)** | `SMO55F0` (`VEN_SMO&DEV_55F0`) | **STMicroelectronics VD55G0** (see nuance below) | Mainline has `drivers/media/i2c/vd55g1.c` (`compatible = "st,vd55g1"`) — but that's the sibling **VD55G1** part, not confirmed to work with VD55G0 |
 
-Two important corrections to earlier drafts of this doc:
+Three important corrections to earlier drafts of this doc:
 
 - **OV02C10 (the Yoga Slim7x sensor) is not what's on this unit.** That
   earlier section is kept below because the Slim7x devicetree pattern is
   still the best structural reference for *how* to wire any sensor to this
   ISP — just not because it's the same sensor.
+- **"No driver exists for IMX681 anywhere" was wrong.** A real driver
+  exists — just not upstream, and not for this device's SoC. See the new
+  section below; this significantly changes the front-camera outlook.
 - **The Qualcomm ISP core (`QCOM0C25`/`QCOM0C98`/`QCOM0C32`/`QCOM0C33`)
   appears to be a shared reference design**, not Surface-specific: the exact
   same `ACPI\VEN_QCOM&DEV_0C32&SUBSYS_CRD08380` "Spectra 695 ISP Camera
@@ -137,6 +140,63 @@ bring-up activity; either would likely be a closer reference than the Slim7x
 for the ISP-core side of the devicetree, even if their sensor picks also
 differ from the Surface Pro 11's.
 
+### A real IMX681 (and OV13858) driver exists — for the *other* Surface Pro 11
+
+"Surface Pro 11" is ambiguous: Microsoft shipped it in both an **Intel Core
+Ultra (Lunar Lake)** SKU and the **Qualcomm Snapdragon X Elite** SKU this
+project targets. [linux-surface/linux-surface#2153](https://github.com/linux-surface/linux-surface/issues/2153)
+and its linked [PR #2156](https://github.com/linux-surface/linux-surface/pull/2156)
+document real, working Linux camera bring-up on the **Surface Pro 10**
+(Intel Meteor Lake) — but the front-camera driver in it was explicitly
+**"ported from AndreGilerson's SP11 work,"** meaning someone already wrote a
+real `imx681.c` driver for the *Intel* Surface Pro 11, confirmed by that
+PR's own commit message: *"Sony IMX681 sensor driver supporting both
+Surface Pro 10 (MTL, 380.8 MHz C-PHY) and Surface Pro 11 (LNL, 969.6 MHz
+D-PHY)"* — LNL = Lunar Lake, i.e. the Intel SKU, not this project's target.
+
+This does not directly work on the Qualcomm board — the driver, ipu-bridge
+wiring, and INT3472 power-controller code are all Intel-IPU6-specific. But
+because the ACPI extraction above confirms **the same physical sensors and
+even the same ACPI IDs** are used on both SKUs, large parts of this work are
+directly reusable, and a saved local copy (GPL-2.0, same license this
+project's other kernel patches use) lives in
+[`kernel-patches/camera/reference/`](kernel-patches/camera/reference/):
+
+- **`imx681.c` already has real devicetree support** — `compatible =
+  "sony,imx681"`, a proper `of_match_table`, confirmed regulator names
+  (`avdd`, `dvdd`, `dovdd`), reset-gpio handling, runtime PM, and a full
+  register init sequence reverse-engineered from an actual Windows I2C
+  trace of Surface Pro 11 hardware. Chip-ID register `0x0016` → expected
+  `0x0681`. This is the single biggest correction to earlier drafts of this
+  doc — front camera has a real starting driver, not nothing.
+- **A confirmed hardware quirk, almost certainly silicon-level (not
+  platform-specific) and therefore relevant regardless of ISP**: the
+  analog-gain register (`0x0204`) is **inverted** — hardware code `0` = 16×
+  gain, not 1×. Getting this backwards was the root cause of chronically
+  dark images across several of that issue's update posts.
+- **What does *not* transfer**: the hardcoded clock/PLL values
+  (`IMX681_LINK_FREQ = 380800000` for the *Intel* SP10; the issue thread's
+  969.6 MHz figure is for the *Intel* SP11, not this Qualcomm board) — these
+  need independent verification against this board's actual clock, not
+  assumption. Same for anything routed through `ipu-bridge.c`/`int3472/*` —
+  Intel-specific, no CAMSS equivalent needed since CAMSS handles that role
+  differently.
+- **The `ov13858.c` patch in the same issue** adds reset-GPIO + regulator +
+  clock handling the mainline driver is completely missing (confirmed by
+  reading current mainline source — it has *no* power sequencing code at
+  all right now). Needed regardless of platform. Regulator names used there
+  (`avdd`, `pwr1`) are flagged in the patch's own code comment as
+  possibly-not-canonical — don't treat them as gospel the way `imx681.c`'s
+  names can be.
+- **SMO55F0 (IR) is confirmed "no driver exists" on Intel SP10/SP11 too** —
+  consistent with this doc's own VD55G0 finding, not a contradiction.
+- The issue thread also produced a public [libcamera IPA tuning gist](https://gist.github.com/djmulder/2ce4980d8fc438bf72201d361f4a55e4)
+  (CameraSensorHelper, AGC yaml, AWB colour gains, gamma) — relevant once
+  frames are flowing, not before.
+
+Full detail on how to use this reference is in
+[CAMERA_BRINGUP.md](CAMERA_BRINGUP.md).
+
 ### The Surface Pro 11 devicetree patch series does not touch camera
 
 The mainline **`arm64: dts: qcom: Add support for Surface Pro 11`** series
@@ -163,9 +223,13 @@ wrinkle above) can be re-verified the same way.
    [CAMERA_BRINGUP.md → A1](CAMERA_BRINGUP.md#a1-identify-the-sensor--method-for-re-verification--a-different-unit)
    if you need to re-verify against a different unit or hardware revision.
 2. **Confirm a Linux driver exists** for each sensor — also now done, see
-   the table above: OV13858 (rear) exists but needs a small devicetree-match
-   patch; VD55G1 (IR) exists but this unit's part is the sibling VD55G0,
-   unconfirmed compatibility; IMX681 (front) has no known driver anywhere.
+   the table above: OV13858 (rear) exists in mainline but needs
+   devicetree-match + power-sequencing patches (a real out-of-tree patch
+   for the latter already exists); IMX681 (front) has no mainline driver,
+   but a real, devicetree-ready out-of-tree driver exists for a different
+   SKU of this same device (see "A real IMX681 driver exists" above);
+   VD55G1 (IR) exists in mainline but this unit's part is the sibling
+   VD55G0, unconfirmed compatibility.
 3. **Write the board devicetree nodes** once CAMSS + CSIPHY are in the
    X1E80100 `.dtsi` (patch series above): sensor I2C node with
    `compatible`, regulators, clocks, reset/powerdown GPIOs, plus the
@@ -290,10 +354,11 @@ the status/research summary; that one is the "how to actually do it" guide.
   14Q8X9 / Samsung Galaxy Book4 Edge Linux bring-up (same ISP core,
   confirmed above) are the best resources for the node structure step 3
   needs.
-- For the front sensor (IMX681, no known driver anywhere), writing a new
-  V4L2 sensor driver is now the realistic path — `ov13858.c` and
-  `vd55g1.c` are reasonable structural references for what a from-scratch
-  driver needs to implement, even though neither is the same sensor.
+- For the front sensor (IMX681), don't write a driver from scratch — start
+  from [`kernel-patches/camera/reference/imx681.c`](kernel-patches/camera/reference/imx681.c)
+  (real, devicetree-ready, written for a different SKU of this exact
+  device — see "A real IMX681 driver exists" above) and adapt the
+  platform-specific clock/PLL values for this board.
 
 ## References
 
@@ -308,4 +373,6 @@ the status/research summary; that one is the "how to actually do it" guide.
 - [Microsoft Surface Pro 11 Front Facing Camera Replacement — iFixit](https://www.ifixit.com/Guide/Microsoft+Surface+Pro+11+Front+Facing+Camera+Replacement/175373) — confirms a multi-component "front sensor assembly," not sensor-level detail (superseded by the ACPI/DSDT extraction above for actual identity).
 - `drivers/media/i2c/ov13858.c`, `ov02c10.c`, `vd55g1.c` in mainline Linux — read directly for driver-match-table and power-sequencing status cited throughout this doc.
 - STMicroelectronics [VD55G0](https://www.st.com/resource/en/datasheet/vd55g0.pdf) / [VD55G1](https://www.st.com/resource/en/datasheet/vd55g1.pdf) datasheets — confirms these are related but distinct parts (644×604 vs. 804×704), consistent with the mainline driver's model-ID check rejecting one for the other.
+- [linux-surface/linux-surface#2153](https://github.com/linux-surface/linux-surface/issues/2153) and [#2156](https://github.com/linux-surface/linux-surface/pull/2156) — real Linux camera bring-up for Surface Pro 10 (Intel), including a real `imx681.c` driver "ported from AndreGilerson's SP11 work" (the *Intel* SKU of Surface Pro 11). Saved locally at [`kernel-patches/camera/reference/`](kernel-patches/camera/reference/) — see that directory's README for exactly what transfers to this Qualcomm board and what doesn't.
+- [djmulder's libcamera IPA tuning gist](https://gist.github.com/djmulder/2ce4980d8fc438bf72201d361f4a55e4) — CameraSensorHelper/AGC/AWB/gamma for IMX681, relevant once frames flow.
 - `camera/` in this repo — raw extraction: `sensor-hardware-ids.log` (PowerShell/`pnputil` ACPI enumeration), `driver-extraction.log` + the copied DriverStore packages (`SCFG_*.bin`, sensor-module `.bin`/`.pb`/`.json` tuning files), `iasl-win-20260408/{dsdt,ssdt}.dsl` (full disassembled ACPI tables). This is the primary source for everything in the confirmed-hardware section above.

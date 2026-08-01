@@ -21,9 +21,10 @@ sign you're doing it wrong.
 
 ## Phase map
 
-1. **Phase A — RGB camera.** The prerequisite for everything else, including IR.
-2. **Phase B — IR camera + illuminator (Windows Hello).** Depends entirely on A.
-3. **Phase C — Fedora userspace integration.** `howdy`, PAM, testing.
+1. **Phase A — Rear camera (OV13858).** Mainline driver + a real out-of-tree power-sequencing patch to adapt.
+2. **Phase A2 — Front camera (IMX681).** No mainline driver, but a real out-of-tree devicetree-ready driver exists to adapt (saved in this repo).
+3. **Phase B — IR camera + illuminator (Windows Hello).** Depends on A/A2's CAMSS-wiring groundwork.
+4. **Phase C — Fedora userspace integration.** `howdy`, PAM, testing.
 
 Do them in order. Don't start B before A works — see CAMERA.md's "harder
 superset" section for why.
@@ -41,14 +42,15 @@ headline results:
 
 | Function | ACPI `_HID` | Part | Driver situation |
 | --- | --- | --- | --- |
-| Rear (RGB) | `OVTID858` | OmniVision **OV13858** | `drivers/media/i2c/ov13858.c` exists, ACPI-only — needs a small `of_device_id` patch |
-| Front (RGB) | `SONY0681` | Sony **IMX681** | No mainline driver, no known out-of-tree source |
+| Rear (RGB) | `OVTID858` | OmniVision **OV13858** | Mainline `ov13858.c` exists, ACPI-only, **no power-sequencing code at all** — needs devicetree-match + a real out-of-tree reset/regulator/clock patch already exists |
+| Front (RGB) | `SONY0681` | Sony **IMX681** | No mainline driver, but a **real, devicetree-ready out-of-tree driver exists** — written for the *Intel* SKU of "Surface Pro 11," not this Qualcomm one; see Phase A2 |
 | IR (Hello) | `SMO55F0` | ST **VD55G0** | Mainline has `vd55g1.c` for the sibling part; not confirmed to match this one |
 
-Start with the **rear camera (OV13858)** — it has the shortest path to a
-working `/dev/videoN` of the three, since a real driver already exists and
-just needs devicetree-match support added, following the exact pattern
-`ov02c10.c` already demonstrates (see A3).
+Both rear and front cameras now have a real starting driver to adapt —
+neither needs to be written from scratch. Start with whichever you find
+more tractable; A1–A5 below cover the rear camera (OV13858) in detail, and
+**Phase A2** covers the front camera (IMX681) using the saved reference
+driver.
 
 - `CONFIG_VIDEO_QCOM_CAMSS` (the SoC-side ISP driver) has X1E80100 support
   landing upstream (Bryan O'Donoghue's CAMSS series — check its current
@@ -214,22 +216,36 @@ already has one. This is a small, well-understood patch: add an
 below assumes `compatible = "ovti,ov13858"` exists, which it doesn't yet
 upstream.
 
-Verified from `ov13858.c` source: chip-ID register `0x300a` should read
-`0x00d855`; the driver needs a `clocks` property (external clock — check
-`ov13858_probe()`'s rate validation for the exact accepted value/range) and
-calls `regulator_bulk_get`/`gpiod_get` for power sequencing — **check the
-exact regulator/GPIO names in the current source before writing the node**,
-since (unlike `ov02c10.c`) this wasn't fully cross-checked as part of this
-research pass.
+**Update (2026-08): the power-sequencing patch already exists.** Mainline
+`ov13858.c` has *no* regulator/clock/reset-GPIO code at all — confirmed by
+reading current source. A real out-of-tree patch fixing exactly that is
+saved at [`kernel-patches/camera/reference/ov13858-reset-regulator-clock.patch`](kernel-patches/camera/reference/)
+(from [linux-surface#2153](https://github.com/linux-surface/linux-surface/issues/2153),
+tested on a real Surface Pro 10). Verified from that patch + current
+mainline source:
+
+- Chip-ID register `0x300a` should read `0x00d855`.
+- Clock: `devm_clk_get_optional(dev, "xvclk")` — property name `xvclk`.
+- Regulators in the reference patch: `"avdd"`, `"pwr1"` — but the patch's
+  own code comment flags these as possibly-not-canonical ("`// Or use
+  standard names that might be more correct`"), so don't treat them as
+  gospel; verify against current source before relying on them.
+- Confirmed real power-up sequence, in order: assert reset → enable clock →
+  enable regulators → wait 5–10 ms → deassert reset → wait 20 ms. This
+  ordering matters and isn't expressible in the devicetree node alone — the
+  driver patch has to implement it.
+- `.of_match_table` is still **not** in that patch — it only fixes
+  power-sequencing via ACPI. Adding `compatible = "ovti,ov13858"` (below)
+  is still separate, additional work this project needs to do.
 
 This is the actual bring-up work, and the part that's genuinely
 device-specific — nobody can hand you exact values for the Surface Pro 11
 sight-unseen. What follows is a template built from **verified real
-values** (the Slim7x CAMSS-side fragment, confirmed OV13858 chip-ID) with
-**SP11-specific placeholders** — I2C bus/address, regulator/GPIO names —
-that ACPI could not provide (see A0) and that still need to come from a
-live I2C bus scan (A1, technique 3) or `SCFG_REAR_MSHW0491.bin` reverse
-engineering.
+values** (the Slim7x CAMSS-side fragment, confirmed OV13858 chip-ID and
+power-sequencing above) with **SP11-specific placeholders** — I2C
+bus/address, regulator/GPIO *rail mapping* — that ACPI could not provide
+(see A0) and that still need to come from a live I2C bus scan (A1,
+technique 3) or `SCFG_REAR_MSHW0491.bin` reverse engineering.
 
 Put this as a patch under `kernel-patches/camera/` (that directory already
 exists and `install.sh --kernel` already picks up `*.patch` files from it —
@@ -246,22 +262,22 @@ bus depends on A1's findings):
         compatible = "ovti,ov13858";   /* NOT yet real upstream — add this of_device_id in the A3 driver patch first */
         reg = <0x TODO>;
 
-        /* Regulator/GPIO names below are placeholders, NOT read from
-         * ov13858.c in this research pass (unlike ov02c10.c, which was
-         * fully cross-checked) — confirm the actual regulator_bulk_get()/
-         * gpiod_get() calls in the current driver source before relying on
-         * these names, then get the rail mapping itself from an I2C scan
-         * or the SCFG blob (see A0) — the Slim7x/T14s regulator-naming
-         * mixup in CAMERA.md is exactly the mistake to avoid here. */
-        dovdd-supply = <&TODO_io_rail>;
-        avdd-supply  = <&TODO_analog_rail>;
-        dvdd-supply  = <&TODO_core_rail>;
+        /* Property names below match the reset/regulator/clock patch in
+         * kernel-patches/camera/reference/ (real, tested on a Surface Pro
+         * 10 — see A3 text). "avdd"/"pwr1" are flagged in that patch's own
+         * comment as possibly-not-canonical; verify current source. Either
+         * way, the actual PMIC rail each maps to on THIS board — the
+         * Slim7x/T14s regulator-naming mixup in CAMERA.md is exactly the
+         * mistake to avoid — still needs an I2C scan or SCFG blob RE. */
+        avdd-supply = <&TODO_analog_rail>;
+        pwr1-supply = <&TODO_core_rail>;   /* name per reference patch; may need renaming if not canonical */
 
         reset-gpios = <&tlmm TODO GPIO_ACTIVE_LOW>;
 
-        /* Confirm the accepted external clock rate in ov13858_probe()'s
-         * validation before assuming a value. */
+        /* Reference patch uses devm_clk_get_optional(dev, "xvclk") —
+         * confirm the accepted rate in ov13858_probe()'s validation. */
         clocks = <&TODO_camera_clk>;
+        clock-names = "xvclk";
 
         port {
             ov13858_ep: endpoint {
@@ -341,6 +357,105 @@ whether the same regulator/GPIO group also drives the white "camera active"
 LED (common pattern — Windows lights it whenever the sensor is streaming).
 Likely a `leds-gpio` devicetree node next to the camera node, triggered by
 whatever the SP11's ACPI/Windows driver names its "camera privacy light."
+
+---
+
+## Phase A2 — Front camera (IMX681)
+
+Unlike the rear camera, **don't start from mainline** — there is no
+mainline `imx681.c` to patch. Start from the real, working, devicetree-
+ready driver saved at
+[`kernel-patches/camera/reference/imx681.c`](kernel-patches/camera/reference/imx681.c),
+written for a different SKU of this exact device (see
+[CAMERA.md](CAMERA.md#a-real-imx681-and-ov13858-driver-exists--for-the-other-surface-pro-11)
+for full provenance and the license note). Full context on why this exists
+and what does/doesn't transfer is in that file's directory README — read it
+before starting.
+
+### A2.0. What's already usable as-is
+
+Confirmed by reading the saved source directly:
+
+- **`compatible = "sony,imx681"`**, real `of_match_table`, already wired
+  into the `i2c_driver` struct — copy this file into
+  `drivers/media/i2c/imx681.c` in your kernel tree and it should build and
+  bind on a devicetree system, same as any other sensor driver.
+- Regulator names: **`avdd`, `dvdd`, `dovdd`** (three supplies, standard
+  naming — more confidence in these than the OV13858 patch's `avdd`/`pwr1`,
+  since these follow ordinary devicetree regulator-name convention rather
+  than an ACPI/INT3472-idiom workaround).
+- Reset GPIO: `"reset"`. Clock: unnamed (`devm_clk_get_optional(dev,
+  NULL)`), same pattern as `ov02c10.c`.
+- Chip-ID register `0x0016` → expected `0x0681`, with 5-attempt retry logic
+  already built in (100 ms apart) — useful if power-up timing needs tuning
+  on this board.
+- **Confirmed hardware quirk, silicon-level not platform-level**: the
+  analog-gain register (`0x0204`) is inverted — hardware code `0` = 16×
+  gain, not 1×. The saved driver already handles this correctly
+  (`ana_code = 960 - min(ctrl->val, 960)`); if you end up rewriting gain
+  handling, don't reintroduce this bug.
+
+### A2.1. What needs to change for this board
+
+- **Clock/PLL values are wrong for this board and need re-verification.**
+  The saved file hardcodes `IMX681_LINK_FREQ = 380800000` (380.8 MHz) —
+  that's the *Intel Surface Pro 10's* value. The issue thread that produced
+  this driver separately measured 969.6 MHz for the *Intel* Surface Pro 11
+  (PLL multiplier `0x0307 = 0xE1`, `0x030D = 0x03012F`) — plausibly close
+  to this Qualcomm board's actual clock given it's likely the same physical
+  Leopard Imaging camera module, but **not confirmed for the Qualcomm SKU**
+  and not present in the saved file itself (only in the issue thread's
+  prose). Verify empirically: if chip-ID reads correctly but the PLL is
+  wrong, streaming will typically fail or produce corrupt frames rather
+  than a clean probe failure — don't assume PLL is right just because probe
+  succeeds.
+- **I2C bus/address, regulator rail mapping, reset GPIO number**: same gap
+  as the rear camera (A0) — not in ACPI, needs I2C scan or
+  `SCFG_FRONT_MSHW0490.bin` reverse engineering.
+- **CSIPHY/CAMSS-side devicetree wiring**: same as A3's CAMSS-side
+  template, different CSIPHY index (unknown, don't assume it matches the
+  rear camera's).
+- Everything Intel-specific in the original context (`ipu-bridge.c`,
+  `int3472/*.c`, C-PHY-vs-D-PHY IPU6 driver debugging) is **not relevant**
+  — CAMSS doesn't have an IPU6-shaped bridge layer, and the issue thread's
+  own later correction found this exact sensor module is D-PHY, not C-PHY,
+  which is one less variable to worry about.
+
+### A2.2. Devicetree template
+
+```dts
+&i2c_TODO {
+    status = "okay";
+
+    camera@TODO {  /* I2C address unknown — see A2.1 */
+        compatible = "sony,imx681";   /* real, already in the saved driver */
+        reg = <0x TODO>;
+
+        avdd-supply  = <&TODO_analog_rail>;
+        dvdd-supply  = <&TODO_core_rail>;
+        dovdd-supply = <&TODO_io_rail>;
+
+        reset-gpios = <&tlmm TODO GPIO_ACTIVE_HIGH>;  /* driver deasserts with value 0 — check polarity */
+
+        clocks = <&TODO_camera_clk>;  /* rate: verify, don't assume 969.6 MHz — see A2.1 */
+
+        port {
+            imx681_ep: endpoint {
+                remote-endpoint = <&camss_csiphyN_inep0>;
+                data-lanes = <0 1>;   /* confirmed 2-lane D-PHY in the saved driver/issue thread */
+                link-frequencies = /bits/ 64 <TODO>;  /* NOT 380800000 — that's the Intel SP10 value; verify this board's actual rate */
+            };
+        };
+    };
+};
+```
+
+If the clock/PLL values (`0x0307`, `0x030D` in the saved driver's
+`imx681_init_regs[]`) turn out wrong for this board's actual input clock,
+recalculate using the same formula the issue thread used:
+`external_clock_MHz × multiplier / pll_predivider / 2 = link_freq_MHz` —
+solve for `multiplier` given this board's actual external clock and target
+link frequency once both are known.
 
 ---
 
@@ -490,28 +605,34 @@ and, for Phase B, `howdy`.
 
 ## Realistic assessment
 
-- **All three sensors are now identified with a mainline driver situation
-  known for each** (OV13858 rear: exists, needs a small devicetree-match
-  patch; VD55G0 IR: closest relative exists, model-ID mismatch unconfirmed
-  either way; IMX681 front: no driver anywhere). This is real, load-bearing
-  progress — it turns "we don't know what's on this board" into "we know
-  exactly what's on this board and what each piece needs," which is most of
-  the uncertainty this doc used to carry.
-- **What's now the single biggest blocker for all three**: I2C bus,
+- **All three sensors are identified, and none needs a driver written fully
+  from scratch anymore.** OV13858 (rear): mainline driver + a real
+  out-of-tree power-sequencing patch. IMX681 (front): no mainline driver,
+  but a real, devicetree-ready out-of-tree driver exists and is saved in
+  this repo. VD55G0 (IR): mainline has the closest relative (VD55G1),
+  compatibility unconfirmed. This is a substantially better starting point
+  than earlier drafts of this doc described — "no driver anywhere" for the
+  front camera was simply wrong, corrected 2026-08.
+- **What's now the single biggest blocker for all of them**: I2C bus,
   address, and regulator/GPIO wiring aren't in ACPI at all (confirmed by
   reading the disassembled DSDT — the sensor device nodes have no `_CRS`).
   That data lives in proprietary `SCFG_*.bin`/sensor-module blobs with an
   undocumented format. Until someone either reverse-engineers that format
   or determines the wiring via live I2C bus scanning + trial devicetree
-  entries on real hardware, A3/B1's devicetree templates stay templates.
-  This — not "which sensor is it" — is now the highest-value open question.
-- **Start with the rear camera (OV13858)**, not front or IR: shortest
-  distance to a working `/dev/videoN` (existing driver, small patch,
-  well-documented chip-ID register for verification), and proves out the
-  I2C-wiring-discovery method the other two sensors will reuse.
-- **Front camera (IMX681)** has no known Linux driver anywhere — budget for
-  this being a from-scratch `drivers/media/i2c/` driver, using `ov13858.c`
-  as a structural reference for what one needs to implement.
+  entries on real hardware, every devicetree template in this file stays a
+  template. This — not "which sensor is it" or "is there a driver" — is now
+  the highest-value open question.
+- **The front camera's clock/PLL values need independent verification**,
+  separately from the I2C-wiring problem above — the saved `imx681.c` was
+  reverse-engineered against a *different* SoC's clock generation (Intel
+  Lunar Lake), and while the same physical camera module makes the Intel
+  SP11's 969.6 MHz figure a reasonable first guess, it's not confirmed for
+  this Qualcomm board. See Phase A2.1.
+- Start with whichever camera you find more tractable to get a first
+  `/dev/videoN` — both rear and front now have comparable starting points
+  (real driver + known chip-ID register + known power-sequencing pattern);
+  the I2C-wiring-discovery method either one requires is directly reusable
+  for the other.
 - Expect **iterative reboots** — each devicetree change needs a rebuild
   (`install.sh --kernel`) and reboot to test. Budget accordingly; this is
   measured in multiple sessions, not one sitting.
@@ -530,8 +651,9 @@ Same sources as [CAMERA.md](CAMERA.md#references), plus:
 - `Documentation/devicetree/bindings/media/i2c/st,vd55g1.yaml` — full
   working devicetree example the B1 template above is based on.
 - `Documentation/leds/leds-class-flash.rst`, `include/media/v4l2-flash-led-class.h` — V4L2 flash subdev framework, relevant if Phase B's illuminator needs synchronized strobing.
-- This repo's `camera/` directory — the raw Windows-side extraction
-  (`sensor-hardware-ids.log`, `driver-extraction.log`, disassembled
-  `iasl-win-20260408/{dsdt,ssdt}.dsl`, and the copied DriverStore packages
-  themselves) that everything sensor-identity-related in this file and
-  CAMERA.md is derived from.
+- [linux-surface/linux-surface#2153](https://github.com/linux-surface/linux-surface/issues/2153) / [#2156](https://github.com/linux-surface/linux-surface/pull/2156) — real Intel-SKU Surface Pro 10/11 camera bring-up; source of `kernel-patches/camera/reference/`. Read that directory's README before assuming anything from it transfers directly.
+- This repo's `camera/` directory (git-ignored, local only) — the raw
+  Windows-side extraction (`sensor-hardware-ids.log`, `driver-extraction.log`,
+  disassembled `iasl-win-20260408/{dsdt,ssdt}.dsl`, and the copied
+  DriverStore packages themselves) that everything sensor-identity-related
+  in this file and CAMERA.md is derived from.
