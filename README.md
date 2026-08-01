@@ -45,6 +45,7 @@ New to this? Start with **[GETTING_STARTED.md](GETTING_STARTED.md)** — a plain
 | [NPU.md](NPU.md) | NPU findings (QNN SDK + llama.cpp Hexagon backend) |
 | [SENSORS.md](SENSORS.md) | Sensor setup (SSC/QMI, hexagonrpcd, Windows registry, libssc) |
 | [CAMERA.md](CAMERA.md) | Camera bring-up research (not working — status of upstream CAMSS, what's needed) |
+| [CAMERA_BRINGUP.md](CAMERA_BRINGUP.md) | Camera bring-up playbook — concrete steps, devicetree templates, driver options |
 | [GETTING_STARTED.md](GETTING_STARTED.md) | First-time installer walkthrough |
 
 ---
@@ -708,7 +709,7 @@ fedora-surface-pro-11/
 ├── GETTING_STARTED.md      First-time installer walkthrough
 ├── install.sh              One-shot installer (all components; see Quick install above)
 ├── INDEX.md                Document index
-├── WIFI.md SOUND.md TOUCHSCREEN.md PEN.md SUSPEND.md NPU.md CAMERA.md
+├── WIFI.md SOUND.md TOUCHSCREEN.md PEN.md SUSPEND.md NPU.md CAMERA.md CAMERA_BRINGUP.md
 ├── scripts/                All installation, troubleshooting & NPU chat scripts (17 files)
 ├── pen-daemon/             Hybrid pen/touch daemon source (sp11-pen-daemon.c)
 ├── systemd/                systemd unit files + drop-in overrides (incl. Wi-Fi board-fixup path unit)

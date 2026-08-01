@@ -16,6 +16,7 @@ This repository contains everything needed to enable Wi-Fi, touchscreen, stylus,
 | [NPU.md](NPU.md) | NPU AI (Hexagon DSP / QNN) | Working | FastRPC permissions, QNN SDK, llama.cpp Hexagon backend, HTP0 offload (48 t/s @ 1B, 21 t/s @ 3B with CDSP reset) |
 | [SENSORS.md](SENSORS.md) | Sensors (accelerometer, gyro, mag, ALS) | Working | SSC/QMI via hexagonrpcd, pre-parsed registry from Windows, custom hexagonrpcd, libssc |
 | [CAMERA.md](CAMERA.md) | Cameras | Not working | Research doc: upstream CAMSS status, what's needed, how to help |
+| [CAMERA_BRINGUP.md](CAMERA_BRINGUP.md) | Cameras (playbook) | Not working | Concrete implementation steps: sensor ID, devicetree templates, driver options |
 
 ## Repository Structure
 
@@ -31,6 +32,7 @@ fedora-surface-pro-11/
 ├── SUSPEND.md                          Suspend/resume findings and solution
 ├── SENSORS.md                          Sensor setup (SSC, hexagonrpcd, libssc)
 ├── CAMERA.md                           Camera bring-up research (not working)
+├── CAMERA_BRINGUP.md                   Camera bring-up playbook (concrete steps)
 ├── scripts/                            Installation and troubleshooting scripts
 │   ├── sp11-grab-fw.sh                 Download DSP firmware from Windows CABs
 │   ├── sp11-wifi-board-fixup.sh        Extract WCN7850 board data file
@@ -71,7 +73,8 @@ fedora-surface-pro-11/
 ├── kernel-patches/                     All kernel patches for SP11
 │   ├── sp11-touchscreen/               SPI/QSPI/HID-over-SPI + DTS node (15 patches)
 │   ├── rfkill-wifi-mac/                ath12k rfkill bypass + devicetree MAC (2 patches)
-│   └── dmic-clock/                     2.4 MHz DMIC clock (1 patch)
+│   ├── dmic-clock/                     2.4 MHz DMIC clock (1 patch)
+│   └── camera/                         Empty — see CAMERA_BRINGUP.md; install.sh --kernel already picks up patches dropped here
 ├── grub/                               Kernel cmdline args (applied via grubby) + GRUB timeout config
 │   ├── sp11-x1e-cmdline.args
 │   └── sp11-default-grub.conf

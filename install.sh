@@ -164,7 +164,7 @@ install_kernel() {
     cd "$KSRC"
     log "Applying Surface Pro 11 patches…"
     git am --abort 2>/dev/null || true
-    for patchset in sp11-touchscreen rfkill-wifi-mac dmic-clock; do
+    for patchset in sp11-touchscreen rfkill-wifi-mac dmic-clock camera; do
         local dir="$SCRIPT_DIR/kernel-patches/$patchset"
         if ls "$dir"/*.patch >/dev/null 2>&1; then
             git am "$dir"/*.patch || die "Failed to apply $patchset patches"
