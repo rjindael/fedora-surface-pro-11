@@ -51,10 +51,40 @@ Phase A1.
 Do this before touching the kernel. It's pure software/data work, low risk,
 and everything downstream depends on getting it right.
 
-**Try these in order — stop as soon as one gives you a clear answer:**
+**Try these in order — stop as soon as one gives you a clear answer.** The
+first three all run *inside Windows* (boot back into it — you kept the
+partition for exactly this); the last runs from Linux.
 
-1. **Grep the Windows DriverStore for a matching INF** (same technique this
-   project already uses for sensors — see [SENSORS.md](SENSORS.md)):
+0. **Device Manager Hardware IDs, from an elevated PowerShell or Command
+   Prompt in Windows:**
+   ```powershell
+   # List camera-class devices with full hardware IDs
+   Get-PnpDevice -Class Camera | Get-PnpDeviceProperty -KeyName DEVPKEY_Device_HardwareIds | Format-List
+
+   # Broader net — catches anything misclassified outside the "Camera" class
+   Get-PnpDevice | Where-Object { $_.FriendlyName -match "camera|infrared|IR " } |
+       Get-PnpDeviceProperty -KeyName DEVPKEY_Device_HardwareIds | Format-List
+   ```
+   Or the built-in CLI tool, no PowerShell module needed:
+   ```
+   pnputil /enum-devices /class Camera
+   ```
+   Expect **two separate entries** — RGB and IR are different PnP devices.
+   Note both Hardware IDs; a `USB\VID_xxxx&PID_xxxx` prefix tells you it's
+   USB/UVC (relevant for Phase B's illuminator section later), while
+   anything else (an ACPI-style ID, or a bus-specific one) points at
+   CSI-attached.
+
+1. **Grep the Windows DriverStore for a matching INF.** From Windows itself,
+   elevated `cmd.exe` (no PowerShell needed):
+   ```cmd
+   cd /d C:\Windows\System32\DriverStore\FileRepository
+   findstr /si "ov02 ovti omnivision hi846 imx gc02 gc05" *.inf
+   dir /s /b C:\Windows\System32\DriverStore\FileRepository\*cam*
+   ```
+   Or the same idea from Linux, on the already-mounted Windows partition
+   (same technique this project already uses for sensors — see
+   [SENSORS.md](SENSORS.md)):
    ```bash
    sudo mkdir -p /mnt/windows
    sudo mount /dev/nvme0n1p3 /mnt/windows   # adjust partition number
@@ -67,20 +97,33 @@ and everything downstream depends on getting it right.
 
 2. **ACPI dump.** Even on a devicetree-booted ARM system, Windows itself
    still uses ACPI for a lot of device description, and the SSDT may name
-   the camera:
+   the camera. Windows has no built-in `acpidump`, but the same ACPICA
+   project that ships Linux's does prebuilt Windows binaries at
+   [acpica.org/downloads](https://acpica.org/downloads) (`acpidump.exe`,
+   `iasl.exe`). Elevated:
+   ```
+   acpidump.exe -b
+   iasl.exe -d *.dat
+   findstr /si "CAM OVTI camera" *.dsl
+   ```
+   No command line preferred? **RWEverything** (free GUI) has an "ACPI
+   Table" browser that does the same thing in a few clicks.
+
+   Or from Linux, once booted (functionally identical, same caveat below):
    ```bash
    sudo acpidump -o sp11-acpi.dat
    iasl -d sp11-acpi.dat   # produces sp11-acpi.dsl
    grep -i -B5 -A20 "cam\|ov02\|ovti" sp11-acpi.dsl
    ```
-   Caveat: Intel IPU6 platforms use predictable ACPI HIDs like `OVTI02C1`
-   for this exact sensor. **Don't assume the same pattern here** — this is
-   a Qualcomm platform, and this project's own [SENSORS.md](SENSORS.md)
-   already found that Windows-on-Snapdragon uses a largely non-ACPI,
-   Qualcomm-proprietary enumeration path (SSC/QMI + a DriverData registry
-   blob) for its sensor hub. The camera may or may not follow the same
-   pattern — this is genuinely unknown until you look. Treat "camera has a
-   normal ACPI HID" as one hypothesis to check, not a certainty.
+   Caveat either way: Intel IPU6 platforms use predictable ACPI HIDs like
+   `OVTI02C1` for this exact sensor. **Don't assume the same pattern here**
+   — this is a Qualcomm platform, and this project's own
+   [SENSORS.md](SENSORS.md) already found that Windows-on-Snapdragon uses a
+   largely non-ACPI, Qualcomm-proprietary enumeration path (SSC/QMI + a
+   DriverData registry blob) for its sensor hub. The camera may or may not
+   follow the same pattern — this is genuinely unknown until you look. Treat
+   "camera has a normal ACPI HID" as one hypothesis to check, not a
+   certainty.
 
 3. **I2C bus scan from Linux**, zero devicetree changes required:
    ```bash

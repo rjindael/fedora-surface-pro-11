@@ -115,7 +115,10 @@ In rough dependency order:
 1. **Identify the sensor(s).** With the Windows partition still intact (this
    project's install process deliberately keeps it — see README
    Prerequisites), the fastest path is *not* teardown but software
-   inspection:
+   inspection. Exact copy-pasteable commands (Windows `pnputil`/PowerShell,
+   `findstr`-based DriverStore search, `acpidump.exe`/`iasl.exe`) are in
+   [CAMERA_BRINGUP.md → A1](CAMERA_BRINGUP.md#a1-identify-the-sensor) —
+   summary here:
    - Windows Device Manager → camera device → Hardware Ids (gives an ACPI
      `\_SB.PEP0...` or `MSFT...` id, sometimes a sensor part number directly).
    - `Windows/System32/DriverStore/FileRepository/` on the Windows partition
