@@ -64,8 +64,8 @@ require_tool() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required tool: $1" >&2
     case "$1" in
-      btmgmt) echo "Install it with: sudo apt update && sudo apt install bluez" >&2 ;;
-      timeout) echo "Install it with: sudo apt update && sudo apt install coreutils" >&2 ;;
+      btmgmt) echo "Install it with: sudo dnf install bluez" >&2 ;;
+      timeout) echo "Install it with: sudo dnf install coreutils" >&2 ;;
     esac
     exit 1
   fi

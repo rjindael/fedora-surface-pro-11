@@ -1,0 +1,13 @@
+[Unit]
+Description=Watch WCN7850 firmware directory for changes (SP11 board.bin fixup)
+
+[Path]
+# Ubuntu's version of this project used an apt Post-Invoke hook, which fires
+# on package installs specifically. Fedora/dnf has no equivalent core hook,
+# so this watches the firmware directory itself and re-runs the fixup on any
+# change to it (a `dnf update` of linux-firmware, a manual file drop, etc.)
+PathChanged=/lib/firmware/ath12k/WCN7850/hw2.0/
+Unit=sp11-wifi-board-fixup.service
+
+[Install]
+WantedBy=multi-user.target

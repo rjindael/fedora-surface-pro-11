@@ -53,7 +53,7 @@ require_tools() {
 
   if [ "${#missing[@]}" -gt 0 ]; then
     echo "Missing required tools: ${missing[*]}" >&2
-    echo "Install them with: sudo apt update && sudo apt install ${missing[*]}" >&2
+    echo "Install them with: sudo dnf install ${missing[*]}" >&2
     exit 1
   fi
 }
@@ -78,7 +78,7 @@ if [ -f "$FW_DIR/board-2.bin" ]; then
 elif [ -f "$FW_DIR/board-2.bin.zst" ]; then
   if ! command -v zstd >/dev/null 2>&1; then
     echo "board-2.bin is compressed; missing required tool: zstd." >&2
-    echo "Install it with: sudo apt update && sudo apt install zstd" >&2
+    echo "Install it with: sudo dnf install zstd" >&2
     exit 1
   fi
   zstd -dc "$FW_DIR/board-2.bin.zst" > board-2.bin

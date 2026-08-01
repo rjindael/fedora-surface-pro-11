@@ -39,9 +39,13 @@ Patch: `kernel-patches/rfkill-wifi-mac/0002-wifi-ath12k-Add-support-for-disablin
 
 Script `scripts/sp11-wifi-board-fixup.sh` extracts a compatible board entry from `board-2.bin` using the Qualcomm `ath12k-bdencoder` tool.
 
-### apt post-invoke hook
+### systemd path-unit hook
 
-Re-runs the fixup after `linux-firmware` upgrades overwrite `board.bin`.
+`sp11-wifi-board-fixup.path` watches `/lib/firmware/ath12k/WCN7850/hw2.0/`
+and re-runs the fixup whenever `linux-firmware` (or anything else) overwrites
+`board-2.bin`. (Ubuntu's version of this project used an apt Post-Invoke
+hook instead; dnf has no direct equivalent, so this watches the firmware
+directory rather than package-manager events.)
 
 ## Verification
 
@@ -58,5 +62,5 @@ nmcli device wifi list   # scanning
 | `kernel-patches/rfkill-wifi-mac/0002-*.patch` | ath12k rfkill bypass |
 | `kernel-patches/rfkill-wifi-mac/0004-*.patch` | devicetree MAC address |
 | `scripts/sp11-wifi-board-fixup.sh` | Board data file extraction |
-| `apt/99surface-pro-11-wifi-fixup` | apt post-invoke hook |
+| `systemd/sp11-wifi-board-fixup.service` + `.path` | Re-extraction path-unit hook |
 | `scripts/troubleshoot-sp11-wifi-rfkill.sh` | rfkill diagnostics |

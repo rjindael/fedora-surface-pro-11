@@ -54,7 +54,7 @@ check_deps() {
 	done
 	if [ ${#missing[@]} -gt 0 ]; then
 		log "ERROR: Missing dependencies: ${missing[*]}"
-		log "Install with: sudo apt install git m4 alsa-utils"
+		log "Install with: sudo dnf install git m4 alsa-utils"
 		exit 1
 	fi
 }

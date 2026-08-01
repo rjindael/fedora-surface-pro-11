@@ -1,8 +1,12 @@
-# Ubuntu on Surface Pro 11 (Snapdragon X Elite)
+# Fedora on Surface Pro 11 (Snapdragon X Elite)
 
 Complete, self-contained setup guide for enabling **Wi-Fi**, **touchscreen**, **stylus (Surface Slim Pen 2)**, **audio (speakers + microphone)**, **suspend/resume**, and **NPU AI** (llama.cpp via QNN) on a Microsoft Surface Pro 11 with Snapdragon X Elite (X1E80100).
 
-Everything needed to reproduce from a stock Ubuntu install is in this repo — scripts, kernel patches, firmware files, configs, and source code.
+Everything needed to reproduce from a stock Fedora install is in this repo — scripts, kernel patches, firmware files, configs, and source code.
+
+New to this? Start with **[GETTING_STARTED.md](GETTING_STARTED.md)** — a plain-language walkthrough for a first install. This README is the complete reference.
+
+> Forked from [denisix/ubuntu-surface-pro-11](https://github.com/denisix/ubuntu-surface-pro-11), which pioneered this bring-up on Ubuntu's Snapdragon X Elite concept image. Everything below has been ported to Fedora: `dnf` in place of `apt`, `grubby`/BLS in place of `update-grub`, RPM kernel packages in place of `.deb`, and the official [Fedora Snapdragon WoA install path](https://fedoraproject.org/wiki/Snapdragon_WoA_Laptop_Install) in place of Ubuntu's concept ISO.
 
 > **Target device:** Microsoft Surface Pro 11, **OLED display**, **16 GB RAM**, **1 TB NVMe** (no 5G model). SKU `Surface_Pro_11th_Edition_2076`, Snapdragon X 12-core X1E80100 @ 3.40 GHz, UEFI firmware `175.222.235`.
 
@@ -24,7 +28,7 @@ Everything needed to reproduce from a stock Ubuntu install is in this repo — s
 | Pen | ✅ | Surface Slim Pen 2 fully working via hybrid HEAT/uinput auto-switching daemon. 1–4095 pressure levels, hover, tip contact, eraser. |
 | Flex Keyboard | ✅ | Type Cover touchpad and keyboard work when attached |
 | Suspend / Resume | ✅ | `s2idle` working via lid-switch daemon (close → backlight off → 60s → suspend → power-button resume). Requires `cpu-sleep-0` cpuidle workaround (`pm_test`-bisected root cause) + hexagonrpcd suspend-hook condition fix. See [SUSPEND.md](SUSPEND.md). |
-| Cameras (and status LEDs) | ❌ | Not working |
+| Cameras (and status LEDs) | ❌ | Not working anywhere in the SP11 Linux community yet. Upstream SoC-level CAMSS driver for X1E80100 is landing (2026-02), but no board-specific devicetree wiring or sensor identification exists. See [CAMERA.md](CAMERA.md) for what's actually known and how to help. |
 | Sensors | ✅ Working | 13 SSC sensors producing data: accelerometer, gyroscope, magnetometer, ambient light, RGB color, compass, SAR, gravity + rotation + game-rotation vectors, fast/relative motion. **Tablet mode** ✅ via SSAM. Pre-parsed registry from Windows DriverData + custom hexagonrpcd. See [SENSORS.md](SENSORS.md). |
 | NPU — CPU inference | ✅ | llama.cpp CPU inference working via QNN SDK + Hexagon backend build |
 | NPU — DSP (HTP0) offload | ✅ | llama.cpp runs on Hexagon NPU via `--device HTP0`. Verified: Llama-3.2-1B (~48 t/s), Qwen2.5-Coder-3B (~21 t/s). CDSP remoteproc reset recommended before each run to defragment rpcmem heap. See [NPU.md](NPU.md). |
@@ -40,13 +44,15 @@ Everything needed to reproduce from a stock Ubuntu install is in this repo — s
 | [SUSPEND.md](SUSPEND.md) | Suspend/resume findings (lid daemon + wake policy + DSP hooks) |
 | [NPU.md](NPU.md) | NPU findings (QNN SDK + llama.cpp Hexagon backend) |
 | [SENSORS.md](SENSORS.md) | Sensor setup (SSC/QMI, hexagonrpcd, Windows registry, libssc) |
+| [CAMERA.md](CAMERA.md) | Camera bring-up research (not working — status of upstream CAMSS, what's needed) |
+| [GETTING_STARTED.md](GETTING_STARTED.md) | First-time installer walkthrough |
 
 ---
 
 ## Prerequisites
 
 - **Secure Boot disabled** in Surface UEFI (hold Volume-Up + Power at boot → UEFI settings).
-- **Do NOT erase Windows.** Keep the Windows partition intact during Ubuntu installation — it is the primary source for Qualcomm DSP firmware (ADSP/CDSP `.mbn` files). If the pre-packaged firmware in this repo doesn't match your exact hardware revision, you can extract it directly from Windows. After installation, mount the Windows partition:
+- **Do NOT erase Windows.** Keep the Windows partition intact during Fedora installation — it is the primary source for Qualcomm DSP firmware (ADSP/CDSP `.mbn` files). If the pre-packaged firmware in this repo doesn't match your exact hardware revision, you can extract it directly from Windows. After installation, mount the Windows partition:
 
 ```bash
 sudo mkdir -p /mnt/windows
@@ -58,31 +64,33 @@ sudo mount /dev/nvme0n1p3 /mnt/windows   # adjust partition number as needed
   sudo ./scripts/sp11-grab-fw.sh --windows-root /mnt/windows
   ```
 
-- **Ubuntu Resolute (concept ISO)** installed on NVMe. Download the Snapdragon X Elite desktop image:
+- **Fedora Workstation aarch64 Live ISO** (44 or later) installed on NVMe. Unlike Ubuntu, this doesn't require a special "concept" build — Fedora 44 added out-of-the-box installer support for Snapdragon WoA laptops. Follow the official **[Fedora Snapdragon WoA Laptop Install](https://fedoraproject.org/wiki/Snapdragon_WoA_Laptop_Install)** wiki page:
 
-```
-https://people.canonical.com/~platform/images/ubuntu-concept/resolute-desktop-arm64+x1e-20260326.iso
-```
-
-  Write it to a USB-C flash drive (16 GB+) and boot the Surface Pro 11 from it. Install to NVMe alongside Windows (do not overwrite the Windows partition).
+  1. Download the aarch64 Fedora Workstation Live ISO (via [Fedora Media Writer](https://fedoraproject.org/workstation/download) or `dd` to a USB-C flash drive, 16 GB+).
+  2. Boot the Surface Pro 11 from it. At the GRUB menu, press `e` and add to the kernel command line:
+     ```
+     clk_ignore_unused pd_ignore_unused systemd.tpm2_wait=0 modprobe.blacklist=qcom_q6v5_pas
+     ```
+     (`modprobe.blacklist=qcom_q6v5_pas` can be omitted if booting from a USB-A port.)
+  3. Run the installer. Install to NVMe **alongside Windows — do not overwrite the Windows partition** (see below for why).
+  4. After first boot, apply Fedora's standard WoA post-install workarounds (90s TPM2 boot delay, `scmi-cpufreq` module, persisting the kernel args via `grubby`) — all documented on the wiki page above. `install.sh --grub` (Step 2 below) also takes care of the persistent kernel-argument part for you, using the fuller SP11-specific argument set this project needs.
 
 - Internet access for the initial firmware download step (Wi-Fi won't work in the live session — use USB-C Ethernet or phone tethering).
 - `sudo` access.
 - Clone this repo to the target machine:
 
 ```bash
-git clone <your-repo-url> ubuntu-surface-pro-11
-cd ubuntu-surface-pro-11
+git clone <your-repo-url> fedora-surface-pro-11
+cd fedora-surface-pro-11
 ```
 
 Install base build dependencies:
 
 ```bash
-sudo apt update
-sudo apt install -y \
+sudo dnf install -y \
     git curl python3 zstd m4 alsa-utils \
-    build-essential gcc make cmake ninja-build \
-    linux-headers-$(uname -r)
+    gcc gcc-c++ make cmake ninja-build \
+    kernel-devel kernel-headers
 ```
 
 ---
@@ -105,7 +113,7 @@ Prefer step-by-step? The **manual instructions** for each component follow below
 
 ## Step 1 — Build and install the patched kernel
 
-The stock Ubuntu `qcom-x1e` kernel lacks Surface Pro 11 patches. This repo includes all 18 kernel patches.
+The stock Fedora WoA kernel lacks Surface Pro 11 patches. This repo includes all 18 kernel patches, applied to the same `qcom-x1e` bring-up tree Ubuntu's concept image uses (the tree itself is distro-agnostic — only its packaging changes here).
 
 ### What the patches do
 
@@ -124,23 +132,22 @@ git clone --depth 1 --branch jg/ubuntu-qcom-x1e-7.1.3-jg-1 \
 cd ~/linux-sp11
 
 # Apply all Surface Pro 11 patches
-git am ~/ubuntu-surface-pro-11/kernel-patches/sp11-touchscreen/*.patch
-git am ~/ubuntu-surface-pro-11/kernel-patches/rfkill-wifi-mac/*.patch
-git am ~/ubuntu-surface-pro-11/kernel-patches/dmic-clock/*.patch
+git am ~/fedora-surface-pro-11/kernel-patches/sp11-touchscreen/*.patch
+git am ~/fedora-surface-pro-11/kernel-patches/rfkill-wifi-mac/*.patch
+git am ~/fedora-surface-pro-11/kernel-patches/dmic-clock/*.patch
 
 # Configure
 cp /boot/config-$(uname -r) .config
 make olddefconfig
 
-# Build deb packages
-make -j$(nproc) bindeb-pkg
+# Build RPM packages
+make -j$(nproc) binrpm-pkg
 ```
 
 ### Install and reboot
 
 ```bash
-cd ..
-sudo dpkg -i linux-image-*.deb linux-headers-*.deb
+sudo dnf install -y ~/rpmbuild/RPMS/*/kernel-*.rpm
 sudo reboot
 ```
 
@@ -155,16 +162,26 @@ uname -r
 
 ## Step 2 — GRUB and boot configuration
 
-Install the GRUB drop-in configs for X1E bring-up arguments:
+Fedora manages kernel arguments per-installed-kernel via `grubby` (Boot Loader
+Spec), not a sourced `/etc/default/grub.d/` the way Ubuntu's `update-grub`
+does. Apply the X1E bring-up arguments to every installed kernel:
 
 ```bash
-sudo cp grub/99-surface-pro-11.cfg /etc/default/grub.d/
-sudo cp grub/98-sp11-timeout.cfg /etc/default/grub.d/
-sudo cp grub/ubuntu-x1e-settings.cfg /etc/default/grub.d/
-sudo update-grub
+sudo grubby --update-kernel=ALL --args="$(grep -v '^\s*#' grub/sp11-x1e-cmdline.args | grep -v '^\s*$' | tr '\n' ' ')"
 ```
 
-Key kernel arguments applied: `clk_ignore_unused pd_ignore_unused arm64.nopauth systemd.tpm2_wait=0 mem_sleep_default=s2idle`
+Then merge the timeout/os-prober settings into `/etc/default/grub` and
+regenerate `grub.cfg`:
+
+```bash
+cat grub/sp11-default-grub.conf | sudo tee -a /etc/default/grub
+sudo grub2-mkconfig -o "$(readlink -f /etc/grub2-efi.cfg)"
+```
+
+`install.sh --grub` (or the default `--all`) does both of these idempotently
+for you.
+
+Key kernel arguments applied: `clk_ignore_unused pd_ignore_unused arm64.nopauth systemd.tpm2_wait=0 mem_sleep_default=s2idle cma=128M efi=noruntime modprobe.blacklist=qcom_q6v5_pas` — see [grub/sp11-x1e-cmdline.args](grub/sp11-x1e-cmdline.args) for what each one is for (the last one is Fedora-specific; Ubuntu's kernel doesn't need it).
 
 ---
 
@@ -180,8 +197,13 @@ sudo cp scripts/sp11-wifi-board-fixup.sh /usr/local/sbin/sp11-wifi-board-fixup
 # Run it (extracts a compatible board.bin from linux-firmware's board-2.bin)
 sudo /usr/local/sbin/sp11-wifi-board-fixup
 
-# Install the apt hook so board.bin is re-extracted after linux-firmware upgrades
-sudo cp apt/99surface-pro-11-wifi-fixup /etc/apt/apt.conf.d/
+# Install the path-unit hook so board.bin is re-extracted whenever the
+# linux-firmware board data changes (dnf's package hooks have no direct
+# equivalent to apt's Post-Invoke, so this watches the firmware dir instead)
+sudo cp systemd/sp11-wifi-board-fixup.service /etc/systemd/system/
+sudo cp systemd/sp11-wifi-board-fixup.path /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now sp11-wifi-board-fixup.path
 ```
 
 Verify:
@@ -491,8 +513,16 @@ sudo udevadm trigger
 
 ### 9b. Install hexagonrpcd (DSP daemon)
 
+Ubuntu's concept archive ships prebuilt `hexagonrpcd` / DSP-binaries packages;
+Fedora has no repo for these. Run `sudo ./install.sh --sensors` first — it
+builds `hexagonrpcd` from source ([linux-msm/hexagonrpc](https://github.com/linux-msm/hexagonrpc))
+and installs its systemd service. The DSP runtime shell binaries
+(`fastrpc_shell_unsigned_3` etc., normally from `hexagon-dsp-binaries-qualcomm-hamoa-iot-evk`
+on Ubuntu) have no Fedora equivalent package at all and must be sourced
+manually — see [NPU.md](NPU.md) Layer 4.
+
 ```bash
-sudo apt install -y hexagonrpcd hexagon-dsp-binaries-qualcomm-hamoa-iot-evk libhexagonrpc-dev
+sudo dnf install -y hexagonrpcd libhexagonrpc0 2>/dev/null || true   # best-effort; see note above
 sudo systemctl enable hexagonrpcd.service
 ```
 
@@ -528,7 +558,7 @@ EOF
 ```bash
 git clone https://github.com/ggml-org/llama.cpp.git ~/llama.cpp
 cd ~/llama.cpp
-cp ~/ubuntu-surface-pro-11/npu/CMakeUserPresets.json .
+cp ~/fedora-surface-pro-11/npu/CMakeUserPresets.json .
 
 export HEXAGON_SDK_ROOT=$QNN_SDK_ROOT
 export HEXAGON_TOOLS_ROOT=$QNN_SDK_ROOT/bin/x86_64-linux-clang
@@ -538,6 +568,10 @@ cmake --build build-snapdragon --config Release -j$(nproc)
 ```
 
 ### 9e. Run on the NPU (HTP0 device)
+
+The `aarch64-ubuntu-gcc9.4` directory name below is Qualcomm's own naming
+inside the QAIRT SDK (their build target ABI label) — it's not Ubuntu-only
+and works the same on Fedora; don't rename it.
 
 ```bash
 export LD_LIBRARY_PATH="\
@@ -669,20 +703,20 @@ systemctl status hexagonrpcd.service         # active
 ## Repository structure
 
 ```
-ubuntu-surface-pro-11/
+fedora-surface-pro-11/
 ├── README.md               This file (full installation guide)
+├── GETTING_STARTED.md      First-time installer walkthrough
 ├── install.sh              One-shot installer (all components; see Quick install above)
 ├── INDEX.md                Document index
-├── WIFI.md SOUND.md TOUCHSCREEN.md PEN.md SUSPEND.md NPU.md
+├── WIFI.md SOUND.md TOUCHSCREEN.md PEN.md SUSPEND.md NPU.md CAMERA.md
 ├── scripts/                All installation, troubleshooting & NPU chat scripts (17 files)
 ├── pen-daemon/             Hybrid pen/touch daemon source (sp11-pen-daemon.c)
-├── systemd/                systemd unit files + drop-in overrides (6 services)
+├── systemd/                systemd unit files + drop-in overrides (incl. Wi-Fi board-fixup path unit)
 ├── system-sleep/           systemd system-sleep hooks (cpuidle s2idle fix)
 ├── udev/                   udev rules (fastrpc + pen symlink)
 ├── audio/                  AudioReach topology binary + UCM2 configs
 ├── kernel-patches/         All kernel patches (18 patches: touchscreen + wifi + dmic)
-├── grub/                   GRUB configuration drop-ins
-├── apt/                    apt post-invoke hook (wifi board file)
+├── grub/                   Kernel cmdline args (grubby) + GRUB timeout config
 └── npu/                    llama.cpp CMakeUserPresets.json (Snapdragon build)
 ```
 

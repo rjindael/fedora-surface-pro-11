@@ -137,9 +137,14 @@ Sets mode `0666` on `/dev/fastrpc-adsp`, `/dev/fastrpc-cdsp`, `/dev/fastrpc-cdsp
 
 ### Layer 2: Install hexagonrpcd
 
+Ubuntu's concept archive ships these as prebuilt packages; Fedora has none of
+them. `hexagonrpcd` gets built from source by `install.sh --sensors` (see
+[SENSORS.md](SENSORS.md)); `hexagon-dsp-binaries-qualcomm-hamoa-iot-evk` has
+no substitute package at all — its contents (Layer 4 below) must be sourced
+manually.
+
 ```bash
-sudo apt install -y hexagonrpcd hexagon-dsp-binaries-qualcomm-hamoa-iot-evk \
-                    libhexagonrpc-dev
+sudo dnf install -y hexagonrpcd libhexagonrpc0 2>/dev/null || true   # best-effort
 sudo systemctl enable hexagonrpcd.service
 ```
 
@@ -175,8 +180,8 @@ nm -D /usr/lib/libcdsprpc.so | grep -E 'remote_handle64_open|remote_session_cont
 
 ### Layer 4: Deploy CDSP firmware + DSP runtime
 
-The CDSP firmware and DSP-side runtime libraries are **not** available from apt
-or the QAIRT SDK. They come from the CDSP.HT.2.9.c1 Qualcomm release for the
+The CDSP firmware and DSP-side runtime libraries are **not** available from
+dnf or the QAIRT SDK. They come from the CDSP.HT.2.9.c1 Qualcomm release for the
 "Denali" (Surface Pro 11) board.
 
 **CDSP firmware** — deploy to the firmware path that the device tree expects:
@@ -271,7 +276,7 @@ host-only builds skip it.
 cd ~/npu-re
 git clone https://github.com/ggml-org/llama.cpp.git
 cd llama.cpp
-cp ~/ubuntu-surface-pro-11/npu/CMakeUserPresets.json .
+cp ~/fedora-surface-pro-11/npu/CMakeUserPresets.json .
 
 # Environment for both host + DSP skeleton build
 export HEXAGON_SDK_ROOT=$QNN_SDK_ROOT          # QAIRT SDK as Hexagon SDK base
@@ -420,5 +425,5 @@ nm -D /usr/lib/libcdsprpc.so | grep remote_handle64_open
 | QAIRT SDK 2.48.0.260626 | [Qualcomm Developer Network](https://www.qualcomm.com/developer/software/qualcomm-ai-engine-direct) | 5 |
 | Hexagon SDK (for DSP skeleton compiler) | [Qualcomm Developer Network](https://developer.qualcomm.com/software/hexagon-dsp-sdk) | 6 |
 | llama.cpp | [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) | 6 |
-| hexagonrpcd | `apt install hexagonrpcd` | 2 |
-| hexagon-dsp-binaries | `apt install hexagon-dsp-binaries-qualcomm-hamoa-iot-evk` | 2 |
+| hexagonrpcd | `dnf install hexagonrpcd` (best-effort), else built from source by `install.sh --sensors` | 2 |
+| hexagon-dsp-binaries | No Fedora package — no substitute for `hexagon-dsp-binaries-qualcomm-hamoa-iot-evk`; source manually | 2 |

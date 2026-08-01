@@ -128,7 +128,7 @@ require_tools() {
 
   if [ "${#missing[@]}" -gt 0 ]; then
     echo "Missing required tools: ${missing[*]}" >&2
-    echo "Install them with: sudo apt update && sudo apt install ${missing[*]}" >&2
+    echo "Install them with: sudo dnf install ${missing[*]}" >&2
     exit 1
   fi
 }

@@ -1,0 +1,39 @@
+# Surface Pro 11 / Snapdragon X Elite kernel command-line arguments.
+#
+# Fedora's Boot Loader Spec (BLS) setup keeps per-kernel arguments in
+# /boot/loader/entries/*.conf, not in a sourced /etc/default/grub.d/ the way
+# Ubuntu's update-grub does. install.sh applies this file via:
+#
+#   grubby --update-kernel=ALL --args="<args>"
+#
+# One argument per line; blank lines and #-comments are stripped before use.
+
+# Don't let the kernel tear down clocks/power-domains that firmware left on
+# but that no driver has claimed yet — several SoC blocks (DSPs, display,
+# USB4) still need them during and after boot.
+clk_ignore_unused
+pd_ignore_unused
+
+# Pointer authentication trap workaround for this kernel/firmware combo.
+arm64.nopauth
+
+# The EFI firmware advertises a TPM2 that the kernel can't fully drive yet;
+# without this, first boot stalls ~90s waiting on it (see Fedora's Snapdragon
+# WoA wiki page).
+systemd.tpm2_wait=0
+
+# Suspend/resume (s2idle) — see SUSPEND.md.
+mem_sleep_default=s2idle
+
+# Reserve a contiguous DMA pool for the DSPs (audio/NPU firmware loading).
+cma=128M
+
+# Avoid calling into EFI runtime services post-boot; they're unreliable on
+# this firmware and have caused hangs during suspend/resume testing.
+efi=noruntime
+
+# Fedora's initramfs auto-loads qcom_q6v5_pas (the generic Qualcomm
+# remoteproc driver) for the ADSP/CDSP, which fights with the hexagonrpcd
+# userspace stack this project uses instead. Ubuntu's concept kernel doesn't
+# autoload it, so this argument is Fedora-specific.
+modprobe.blacklist=qcom_q6v5_pas

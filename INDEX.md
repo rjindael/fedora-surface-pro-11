@@ -1,12 +1,13 @@
-# Ubuntu on Surface Pro 11 (Snapdragon X Elite) — Documentation Index
+# Fedora on Surface Pro 11 (Snapdragon X Elite) — Documentation Index
 
-This repository contains everything needed to enable Wi-Fi, touchscreen, stylus, audio, suspend, and NPU AI on a Surface Pro 11 (Snapdragon X Elite / X1E80100) running Ubuntu, from a stock install.
+This repository contains everything needed to enable Wi-Fi, touchscreen, stylus, audio, suspend, and NPU AI on a Surface Pro 11 (Snapdragon X Elite / X1E80100) running Fedora, from a stock install.
 
 ## Documents
 
 | Document | Topic | Status | Summary |
 | --- | --- | --- | --- |
-| [README.md](README.md) | Full installation guide | Complete | Step-by-step installation of all components from a stock Ubuntu system |
+| [README.md](README.md) | Full installation guide | Complete | Step-by-step installation of all components from a stock Fedora system |
+| [GETTING_STARTED.md](GETTING_STARTED.md) | First-time installer walkthrough | Complete | Plain-language guide for a first install, hands off to README.md |
 | [WIFI.md](WIFI.md) | Wi-Fi (WCN7850 / ath12k) | Working | Kernel rfkill bypass + WCN7850 board data file extraction |
 | [SOUND.md](SOUND.md) | Audio (speakers + microphone) | Partially working | DSP firmware, AudioReach topology, UCM2 config, boot-race fix, PipeWire sink |
 | [TOUCHSCREEN.md](TOUCHSCREEN.md) | Touchscreen (HID-over-SPI) | Working (single-touch) | SPI/QSPI kernel patches, Denali DTS node, standard HID single-touch |
@@ -14,12 +15,14 @@ This repository contains everything needed to enable Wi-Fi, touchscreen, stylus,
 | [SUSPEND.md](SUSPEND.md) | Suspend / Resume | Partially working | Lid-switch backlight control, power-button-only wake, SSAM debug logging, DSP hooks |
 | [NPU.md](NPU.md) | NPU AI (Hexagon DSP / QNN) | Working | FastRPC permissions, QNN SDK, llama.cpp Hexagon backend, HTP0 offload (48 t/s @ 1B, 21 t/s @ 3B with CDSP reset) |
 | [SENSORS.md](SENSORS.md) | Sensors (accelerometer, gyro, mag, ALS) | Working | SSC/QMI via hexagonrpcd, pre-parsed registry from Windows, custom hexagonrpcd, libssc |
+| [CAMERA.md](CAMERA.md) | Cameras | Not working | Research doc: upstream CAMSS status, what's needed, how to help |
 
 ## Repository Structure
 
 ```
-ubuntu-surface-pro-11/
+fedora-surface-pro-11/
 ├── README.md                           Full installation guide (start here)
+├── GETTING_STARTED.md                  First-time installer walkthrough
 ├── INDEX.md                            This file
 ├── WIFI.md                             Wi-Fi findings and solution
 ├── SOUND.md                            Audio findings and solution
@@ -27,6 +30,7 @@ ubuntu-surface-pro-11/
 ├── PEN.md                              Pen/stylus findings and solution
 ├── SUSPEND.md                          Suspend/resume findings and solution
 ├── SENSORS.md                          Sensor setup (SSC, hexagonrpcd, libssc)
+├── CAMERA.md                           Camera bring-up research (not working)
 ├── scripts/                            Installation and troubleshooting scripts
 │   ├── sp11-grab-fw.sh                 Download DSP firmware from Windows CABs
 │   ├── sp11-wifi-board-fixup.sh        Extract WCN7850 board data file
@@ -50,6 +54,8 @@ ubuntu-surface-pro-11/
 │   ├── sp11-wsa-routing.service
 │   ├── sp11-pipewire-restart.service
 │   ├── sp11-lid-backlight.service
+│   ├── sp11-wifi-board-fixup.service   Re-extracts board.bin on firmware changes
+│   ├── sp11-wifi-board-fixup.path      Watches firmware dir, triggers the above
 │   ├── sensors-platform-info.service   Platform ID files for hexagonrpcd
 │   └── hexagonrpcd-sensors.service     Custom hexagonrpcd early-start service
 ├── udev/                               udev rules
@@ -66,12 +72,9 @@ ubuntu-surface-pro-11/
 │   ├── sp11-touchscreen/               SPI/QSPI/HID-over-SPI + DTS node (15 patches)
 │   ├── rfkill-wifi-mac/                ath12k rfkill bypass + devicetree MAC (2 patches)
 │   └── dmic-clock/                     2.4 MHz DMIC clock (1 patch)
-├── grub/                               GRUB configuration drop-ins
-│   ├── 99-surface-pro-11.cfg
-│   ├── 98-sp11-timeout.cfg
-│   └── ubuntu-x1e-settings.cfg
-├── apt/
-│   └── 99surface-pro-11-wifi-fixup     apt post-invoke hook for board file
+├── grub/                               Kernel cmdline args (applied via grubby) + GRUB timeout config
+│   ├── sp11-x1e-cmdline.args
+│   └── sp11-default-grub.conf
 ├── npu/
 │   └── CMakeUserPresets.json           llama.cpp Snapdragon build presets
 └── sensors/

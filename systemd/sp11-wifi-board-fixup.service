@@ -1,0 +1,6 @@
+[Unit]
+Description=Regenerate SP11 WCN7850 Wi-Fi board.bin after firmware changes
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/sp11-wifi-board-fixup

@@ -80,8 +80,8 @@ while [ $# -gt 0 ]; do
         --kernel)   DO_KERNEL=true;  EXPLICIT=true ;;
         --uninstall) DO_UNINSTALL=true ;;
         --list)     echo "$USAGE"; echo; echo "Available phases:"; \
-                    echo "  grub      GRUB drop-in configs + update-grub"; \
-                    echo "  wifi      WCN7850 board data + apt hook"; \
+                    echo "  grub      Kernel cmdline args (grubby) + GRUB timeout config"; \
+                    echo "  wifi      WCN7850 board data + path-unit auto re-fixup"; \
                     echo "  audio     DSP firmware + topology + UCM2 + boot-race fix + PipeWire sink"; \
                     echo "  pen       Stylus daemon (udev + build + service)"; \
                     echo "  suspend   cpu-sleep-0 fix + hexagonrpcd hooks + lid daemon"; \
@@ -119,9 +119,11 @@ if $DO_UNINSTALL; then
     phase "Uninstall"
     systemctl disable --now \
         sp11-lid-backlight.service sp11-pen-daemon.service \
-        sp11-suspend-debug.service sp11-wsa-routing.service 2>/dev/null || true
+        sp11-suspend-debug.service sp11-wsa-routing.service \
+        sp11-wifi-board-fixup.path 2>/dev/null || true
     user_systemctl disable --now sp11-pipewire-restart.service 2>/dev/null || true
-    rm -f /etc/systemd/system/sp11-{lid-backlight,pen-daemon,suspend-debug,wsa-routing}.service
+    rm -f /etc/systemd/system/sp11-{lid-backlight,pen-daemon,suspend-debug,wsa-routing,wifi-board-fixup}.service
+    rm -f /etc/systemd/system/sp11-wifi-board-fixup.path
     rm -f /usr/local/sbin/sp11-{lid-backlight,pen-daemon,enable-suspend-debug,enable-wsa-routing,wifi-board-fixup,grab-fw,fix-cpuidle-s2idle}
     rm -f /usr/lib/systemd/system-sleep/sp11-cpuidle-s2idle
     rm -rf /etc/systemd/system/hexagonrpcd-{suspend,resume}.service.d
@@ -131,13 +133,15 @@ if $DO_UNINSTALL; then
     rm -rf /etc/systemd/system/hexagonrpcd.service.d
     rm -rf /usr/share/qcom/x1e80100/Microsoft/Surface-Pro-11/sensors
     rm -f /etc/udev/rules.d/99-{sp11-pen,fastrpc}.rules
-    rm -f /etc/apt/apt.conf.d/99surface-pro-11-wifi-fixup
-    rm -f /etc/default/grub.d/{99-surface-pro-11,98-sp11-timeout,ubuntu-x1e-settings}.cfg
+    if command -v grubby >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/grub/sp11-x1e-cmdline.args" ]; then
+        sp11_args="$(grep -v '^\s*#' "$SCRIPT_DIR/grub/sp11-x1e-cmdline.args" | grep -v '^\s*$' | tr '\n' ' ')"
+        grubby --update-kernel=ALL --remove-args="$sp11_args" 2>/dev/null || true
+    fi
     systemctl daemon-reload
     udevadm control --reload-rules 2>/dev/null || true
-    ok "Removed all installed files and services."
+    ok "Removed all installed files and services; SP11 kernel arguments removed via grubby."
     warn "Kernel, firmware, topology, UCM2 configs, and PipeWire sink config left in place."
-    warn "Run: sudo update-grub   to revert GRUB args."
+    warn "GRUB_TIMEOUT/GRUB_DISABLE_OS_PROBER lines added to /etc/default/grub were left in place (edit manually + grub2-mkconfig if you want them gone too)."
     exit 0
 fi
 
@@ -147,6 +151,9 @@ fi
 install_kernel() {
     phase "Kernel — build & install patched kernel"
     local KSRC="${KERNEL_SRC:-$HOME/linux-sp11}"
+    # This is Jens Glathe's generic X1E80100 bring-up tree — the "ubuntu" in
+    # the branch name is just upstream's naming (he tests against Ubuntu's
+    # concept builds); the tree and patches themselves are distro-agnostic.
     log "Cloning Jens Glathe's qcom-x1e tree to $KSRC …"
     if [ ! -d "$KSRC/.git" ]; then
         git clone --depth 1 --branch jg/ubuntu-qcom-x1e-7.1.3-jg-1 \
@@ -167,11 +174,16 @@ install_kernel() {
     log "Configuring…"
     cp /boot/config-"$(uname -r)" .config
     make olddefconfig
-    log "Building deb packages (this takes a while)…"
-    make -j"$(nproc)" bindeb-pkg
+    log "Building RPM packages (this takes a while)…"
+    make -j"$(nproc)" binrpm-pkg
     log "Installing kernel packages…"
-    local parent; parent="$(dirname "$KSRC")"
-    dpkg -i "$parent"/linux-image-*.deb "$parent"/linux-headers-*.deb
+    local rpmdir rpm_files
+    rpmdir="$(rpm --eval '%{_rpmdir}' 2>/dev/null)"
+    [ -n "$rpmdir" ] && [ -d "$rpmdir" ] || rpmdir="$HOME/rpmbuild/RPMS"
+    rpm_files="$(find "$rpmdir" -name '*.rpm' -newer .config 2>/dev/null)"
+    [ -n "$rpm_files" ] || die "No kernel RPMs found under $rpmdir after build"
+    # shellcheck disable=SC2086
+    dnf install -y $rpm_files
     ok "Kernel installed. Reboot to use it: ${C_BOLD}sudo reboot${C_RST}"
     cd "$SCRIPT_DIR"
 }
@@ -181,11 +193,41 @@ install_kernel() {
 # ══════════════════════════════════════════════════════════════════════════
 install_grub() {
     phase "GRUB configuration"
-    for cfg in 99-surface-pro-11 98-sp11-timeout ubuntu-x1e-settings; do
-        install_file "grub/${cfg}.cfg" "/etc/default/grub.d/${cfg}.cfg"
-    done
-    update-grub
-    ok "GRUB drop-ins installed and grub updated"
+
+    # Fedora's Boot Loader Spec (BLS) setup keeps per-kernel cmdline args in
+    # /boot/loader/entries/*.conf, managed via grubby — there's no sourced
+    # /etc/default/grub.d/ the way Ubuntu's update-grub provides.
+    local sp11_args
+    sp11_args="$(grep -v '^\s*#' grub/sp11-x1e-cmdline.args | grep -v '^\s*$' | tr '\n' ' ')"
+    grubby --update-kernel=ALL --remove-args="$sp11_args" >/dev/null 2>&1 || true
+    grubby --update-kernel=ALL --args="$sp11_args"
+    ok "Kernel arguments applied to all installed kernels"
+
+    # GRUB_TIMEOUT / GRUB_DISABLE_OS_PROBER still go through the normal
+    # /etc/default/grub + grub2-mkconfig path; merge our lines in idempotently.
+    local defgrub=/etc/default/grub
+    touch "$defgrub"
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        case "$line" in \#*) continue ;; esac
+        local key="${line%%=*}"
+        if grep -q "^${key}=" "$defgrub"; then
+            sed -i "s|^${key}=.*|${line}|" "$defgrub"
+        else
+            echo "$line" >> "$defgrub"
+        fi
+    done < grub/sp11-default-grub.conf
+
+    local grubcfg
+    if [ -f /etc/grub2-efi.cfg ]; then
+        grubcfg="$(readlink -f /etc/grub2-efi.cfg)"
+    elif [ -f /etc/grub2.cfg ]; then
+        grubcfg="$(readlink -f /etc/grub2.cfg)"
+    else
+        grubcfg="/boot/grub2/grub.cfg"
+    fi
+    grub2-mkconfig -o "$grubcfg"
+    ok "GRUB config regenerated ($grubcfg)"
 }
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -197,8 +239,15 @@ install_wifi() {
     chmod +x /usr/local/sbin/sp11-wifi-board-fixup
     log "Extracting board data file…"
     /usr/local/sbin/sp11-wifi-board-fixup || warn "Board fixup failed (may need firmware package first)"
-    install_file apt/99surface-pro-11-wifi-fixup /etc/apt/apt.conf.d/99surface-pro-11-wifi-fixup
-    ok "Wi-Fi board data + apt hook installed"
+
+    # Re-run automatically whenever linux-firmware replaces board-2.bin.
+    # (Ubuntu's version of this used an apt Post-Invoke hook; dnf has no
+    # direct equivalent, so this watches the firmware directory instead.)
+    install_file systemd/sp11-wifi-board-fixup.service /etc/systemd/system/sp11-wifi-board-fixup.service
+    install_file systemd/sp11-wifi-board-fixup.path     /etc/systemd/system/sp11-wifi-board-fixup.path
+    systemctl daemon-reload
+    systemctl enable --now sp11-wifi-board-fixup.path
+    ok "Wi-Fi board data installed; auto re-extracts after firmware updates (path unit)"
 }
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -345,15 +394,23 @@ install_npu() {
     ok "FastRPC udev rule deployed (0666 on /dev/fastrpc-*)"
 
     # ── 8b — hexagonrpcd + DSP binaries ──────────────────────────────────
-    if ! dpkg -l hexagonrpcd >/dev/null 2>&1; then
-        log "Installing hexagonrpcd packages…"
-        apt update
-        apt install -y hexagonrpcd hexagon-dsp-binaries-qualcomm-hamoa-iot-evk \
-                       libhexagonrpc-dev
+    # Ubuntu's concept archive ships prebuilt hexagonrpcd/DSP-binaries
+    # packages; Fedora has no equivalent repo for these, and
+    # hexagon-dsp-binaries-qualcomm-hamoa-iot-evk in particular doesn't exist
+    # outside that archive. Try a Fedora package name on the off chance it's
+    # been packaged, but don't fail the phase if not — install_sensors()
+    # (or a manual build per NPU.md Layer 4) is the real path to a working
+    # hexagonrpcd on Fedora, and the file-existence checks below already
+    # degrade gracefully when nothing is installed yet.
+    if ! rpm -q hexagonrpcd >/dev/null 2>&1 && [ ! -x /usr/libexec/hexagonrpc/hexagonrpcd ]; then
+        log "hexagonrpcd not found — attempting dnf package (best-effort)…"
+        dnf install -y hexagonrpcd libhexagonrpc0 2>/dev/null || \
+            warn "hexagonrpcd package not available on Fedora; run --sensors first (it builds it from source), or see NPU.md Layer 4"
     else
         ok "hexagonrpcd already installed"
     fi
-    systemctl enable hexagonrpcd.service
+    warn "hexagon-dsp-binaries-qualcomm-hamoa-iot-evk has no Fedora equivalent — DSP runtime shell binaries (fastrpc_shell_unsigned_3 etc.) must be sourced manually; see NPU.md Layer 4."
+    systemctl enable hexagonrpcd.service 2>/dev/null || warn "hexagonrpcd.service unit not present yet (installed by --sensors)"
 
     # If suspend was also requested (or already done), apply the condition fix
     if systemctl list-unit-files --no-pager 2>/dev/null | grep hexagonrpcd-suspend >/dev/null 2>&1; then
@@ -387,7 +444,7 @@ install_npu() {
         ok "libcdsprpc.so already deployed (has remote_handle64_open)"
     else
         log "Building fastrpc user-space library…"
-        apt install -y autoconf automake libtool pkg-config build-essential >/dev/null 2>&1 || true
+        dnf install -y autoconf automake libtool pkgconf-pkg-config gcc gcc-c++ make >/dev/null 2>&1 || true
         mkdir -p "$NPU_RE"
         if [ ! -d "$NPU_RE/fastrpc" ]; then
             as_user git clone -b development https://github.com/qualcomm/fastrpc.git "$NPU_RE/fastrpc"
@@ -468,7 +525,7 @@ EOF
         ok "llama.cpp pkg-snapdragon already built"
     else
         log "Building llama.cpp with Hexagon backend…"
-        apt install -y cmake clang build-essential >/dev/null 2>&1 || true
+        dnf install -y cmake clang gcc gcc-c++ make >/dev/null 2>&1 || true
 
         # Clone llama.cpp
         if [ ! -d "$NPU_RE/llama.cpp/.git" ]; then
@@ -556,7 +613,7 @@ install_sensors() {
 
     # ── packages ──
     log "Installing hexagonrpcd packages"
-    apt-get install -y hexagonrpcd libhexagonrpc0.4 2>/dev/null || true
+    dnf install -y hexagonrpcd libhexagonrpc0 2>/dev/null || true
 
     # ── mount Windows partition ──
     local WIN="/mnt/windows"
@@ -606,12 +663,16 @@ install_sensors() {
     fi
 
     # ── permissions ──
+    # On Ubuntu the "fastrpc" system user/group comes from the hexagonrpcd
+    # package's postinst; Fedora has no such package, so create it ourselves.
+    getent group fastrpc >/dev/null || groupadd -r fastrpc
+    getent passwd fastrpc >/dev/null || useradd -r -g fastrpc -M -s /sbin/nologin fastrpc
     chown -R fastrpc:fastrpc "$SNS_ROOT/sensors/"
 
     # ── custom hexagonrpcd (method 24 + write support) ──
     log "Building custom hexagonrpcd with method 24 + write support"
     if ! command -v meson >/dev/null 2>&1; then
-        apt-get install -y meson ninja-build gcc pkg-config libhexagonrpc-dev 2>/dev/null || true
+        dnf install -y meson ninja-build gcc pkgconf-pkg-config libhexagonrpc-devel 2>/dev/null || true
     fi
     local HEXSRC="$SCRIPT_DIR/hexagonrpc-src"
     if [ ! -d "$HEXSRC" ]; then
@@ -658,8 +719,8 @@ CONF
 
     # ── libssc (QMI sensor client) ──
     log "Installing libssc + ssccli"
-    apt-get install -y meson ninja-build libglib2.0-dev libgstreamer1.0-dev \
-        libgstreamer-plugins-base1.0-dev libudev-dev libqmi-glib-dev libqrtr-glib-dev 2>/dev/null || true
+    dnf install -y meson ninja-build glib2-devel gstreamer1-devel \
+        gstreamer1-plugins-base-devel systemd-devel libqmi-devel qrtr-glib-devel 2>/dev/null || true
 
     local LIBSSC_SRC="$SCRIPT_DIR/libssc-src"
     if [ ! -d "$LIBSSC_SRC" ]; then
